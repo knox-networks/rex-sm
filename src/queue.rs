@@ -22,6 +22,20 @@ struct ReceiverNotifier {
 
 // holds inner VecDeque as well as the notification buffer
 // letting streams know when polling is ready
+// To avoid a "bowtie" effect when consuming
+// objects inserted with .push_front and .push_back
+// front and back values are separated into their own queue
+// so that values are popped in chronological order
+// irrespective of priority
+// ┌ timestamp value (bigger is younger)
+// ^
+// │|         |
+// │|||     |||
+// -|||||||||||
+// │|||     |||
+// │|         |
+// └─────|─────>
+//  queue position
 struct RawDeque<T> {
     front_values: VecDeque<T>,
     back_values: VecDeque<T>,

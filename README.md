@@ -16,7 +16,7 @@
 ### Inspiration
 - [message-io](https://crates.io/crates/message-io)
 - [async-hsm](https://crates.io/crates/async-hsm)
-- [event-driven finate-state machine](https://en.wikipedia.org/wiki/Event-driven_finite-state_machine)
+- [event-driven finite-state machine](https://en.wikipedia.org/wiki/Event-driven_finite-state_machine)
 
 ### Overview
 `StateMachine`s are first registered with the `StateMachineManager`, which I will refer
@@ -68,7 +68,7 @@ Two outputs:
 https://github.com/knox-networks/core/blob/67f7dc6ac57f5c6650d82ce0019e65a31278ae93/common/src/state_machine/node_state_machine.rs#L65-L74
 
 ### `NodeStore` is responsible for:
-* inserting & updating various state hirearchies
+* inserting & updating various state hierarchies
 * operations are done concurrently by holding all node trees in `Arc<Mutex<_>>` containers.
 
 ### This allows `NodeStore` storage to:

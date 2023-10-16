@@ -34,7 +34,7 @@ pub struct Update<Id, S> {
 pub struct Node<Id, S> {
     pub id: Id,
     pub state: S,
-    child_keys: HashSet<Id>, // https://en.wikipedia.org/wiki/Brzozowski_derivative
+    descendant_keys: HashSet<Id>, // https://en.wikipedia.org/wiki/Brzozowski_derivative
     pub children: Vec<Node<Id, S>>,
 }
 
@@ -47,7 +47,7 @@ where
         Self {
             id,
             state: id.new_state(),
-            child_keys: HashSet::new(),
+            descendant_keys: HashSet::new(),
             children: Vec::new(),
         }
     }
@@ -64,12 +64,12 @@ where
         if self.id == id {
             return Some(self);
         }
-        if !self.child_keys.contains(&id) {
+        if !self.descendant_keys.contains(&id) {
             return None;
         }
 
         let mut node = self;
-        while node.child_keys.contains(&id) {
+        while node.descendant_keys.contains(&id) {
             node = node.child(id).unwrap();
         }
         Some(node)
@@ -82,15 +82,15 @@ where
     pub fn child(&self, id: Id) -> Option<&Node<Id, S>> {
         self.children
             .iter()
-            .find(|node| node.id == id || node.child_keys.contains(&id))
+            .find(|node| node.id == id || node.descendant_keys.contains(&id))
     }
 
-    // get array index by of node with Id in self.child_keys
+    // get array index by of node with Id in self.descendant_keys
     pub fn child_idx(&self, id: Id) -> Option<usize> {
         self.children
             .iter()
             .enumerate()
-            .find(|(_idx, node)| node.id == id || node.child_keys.contains(&id))
+            .find(|(_idx, node)| node.id == id || node.descendant_keys.contains(&id))
             .map(|(idx, _)| idx)
     }
 
@@ -119,6 +119,24 @@ where
             .by_id(parent_id)
             .insert_child(id)
             .finish_insert(id)
+    }
+
+    pub fn get_parent_id(&self, id: Id) -> Option<Id> {
+        // root_node edge case
+        if !self.descendant_keys.contains(&id) {
+            return None;
+        }
+
+        let mut node = self;
+        while node.descendant_keys.contains(&id) {
+            let child_node = node.child(id).unwrap();
+            if child_node.id == id {
+                return Some(node.id);
+            }
+            node = child_node;
+        }
+
+        None
     }
 
     pub fn update(&mut self, update: Update<Id, S>) {
@@ -190,11 +208,11 @@ where
     Id: Copy + Eq + PartialEq + Hash + fmt::Display + Kind<State = S> + fmt::Debug,
 {
     fn by_id(mut self, id: Id) -> Zipper<Id, S> {
-        let mut contains_id = self.node.child_keys.contains(&id);
+        let mut contains_id = self.node.descendant_keys.contains(&id);
         while contains_id {
             let idx = self.node.child_idx(id).unwrap();
             self = self.child(idx);
-            contains_id = self.node.child_keys.contains(&id);
+            contains_id = self.node.descendant_keys.contains(&id);
         }
         if self.node.id != id {
             panic!("id[{id}] should be in the node, this is a bug");
@@ -256,10 +274,10 @@ where
 
     //  try something like Iterator::fold
     fn finish_insert(mut self, id: Id) -> Node<Id, S> {
-        self.node.child_keys.insert(id);
+        self.node.descendant_keys.insert(id);
         while self.parent.is_some() {
             self = self.parent();
-            self.node.child_keys.insert(id);
+            self.node.descendant_keys.insert(id);
         }
 
         self.node
@@ -304,11 +322,11 @@ mod tests {
 
     #[test]
     fn insert_child_state() {
-        let alice_id = StateId::new(NodeKind::Alice);
-        let bob_id = StateId::new(NodeKind::Bob);
-        let charlie_id = StateId::new(NodeKind::Charlie);
-        let dave_id = StateId::new(NodeKind::Dave);
-        let eve_id = StateId::new(NodeKind::Eve);
+        let alice_id = StateId::new_rand(NodeKind::Alice);
+        let bob_id = StateId::new_rand(NodeKind::Bob);
+        let charlie_id = StateId::new_rand(NodeKind::Charlie);
+        let dave_id = StateId::new_rand(NodeKind::Dave);
+        let eve_id = StateId::new_rand(NodeKind::Eve);
 
         let mut tree = Node::new(alice_id);
 

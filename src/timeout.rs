@@ -17,11 +17,12 @@ use tokio::{
 use tracing::{debug, warn};
 
 use crate::{
-    manager::{HashKind, Signal},
-    notification::{DefaultInput, DefaultType, InputType, NotificationProcessor},
-    queue::StreamableDeque,
+    manager::{HashKind, Signal, SignalQueue},
+    notification::{GetTopic, Message, Notification, NotificationProcessor, Topic},
     Kind, KindExt, StateId,
 };
+
+const DEFAULT_TIMEOUT_TICK_RATE: Duration = Duration::from_millis(5);
 
 /// TimeoutLedger` contains a [`BTreeMap`] that uses [`Instant`]s to time out
 /// specific [`StateId`]s and a [`HashMap`] that indexes `Instant`s by [`StateId`].
@@ -84,7 +85,7 @@ where
             if matches!(removed_id, None | Some(false)) {
                 warn!("timers[{instant:?}][{id}] not found, cancellation ignored");
             } else {
-                warn!(?id, "cancelled timeout");
+                debug!(?id, "cancelled timeout");
             }
         }
     }
@@ -155,37 +156,40 @@ where
 pub struct TimeoutManager<K, SI>
 where
     K: HashKind,
-    SI: Send + Sync + 'static + fmt::Debug,
+    SI: Send + Sync + 'static + fmt::Debug + Clone,
 {
     // the interval at which  the TimeoutLedger checks for timeouts
     tick_rate: Duration,
     ledger: Arc<Mutex<TimeoutLedger<K>>>,
-    pub(crate) signal_queue: Arc<StreamableDeque<Signal<K, SI>>>,
+
+    pub(crate) signal_queue: Arc<SignalQueue<K, SI>>,
 }
 
 impl<K, SI> TimeoutManager<K, SI>
 where
     K: HashKind + KindExt<Input = SI> + Copy,
-    SI: Send + Sync + 'static + fmt::Debug,
+    SI: Send + Sync + 'static + fmt::Debug + Clone,
 {
-    pub fn new(tick_rate: Duration, signal_queue: Arc<StreamableDeque<Signal<K, SI>>>) -> Self {
+    pub fn new(signal_queue: Arc<SignalQueue<K, SI>>) -> Self {
         Self {
-            tick_rate,
+            tick_rate: DEFAULT_TIMEOUT_TICK_RATE,
             signal_queue,
             ledger: Arc::new(Mutex::new(TimeoutLedger::new())),
         }
     }
 
-    pub fn init_inner<NI>(&self) -> UnboundedSender<NI>
-    where
-        NI: TryInto<TimeoutInput<K>> + Send + 'static,
-    {
-        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<NI>();
+    pub fn with_tick_rate(self, tick_rate: Duration) -> Self {
+        Self { tick_rate, ..self }
+    }
+
+    pub fn init_inner<M: Message>(&self) -> UnboundedSender<Notification<K, M>> {
+        let (input_tx, mut input_rx) = mpsc::unbounded_channel();
         let in_ledger = self.ledger.clone();
 
         tokio::spawn(async move {
+            debug!(target: "state_machine", spawning = "TimeoutManager.notification_tx");
             while let Some(notification) = input_rx.recv().await {
-                let Ok(TimeoutInput{ id, op })  = notification.try_into() else {
+                let Notification::Timeout(TimeoutInput { id, op }) = notification else {
                     warn!("Invalid input");
                     continue;
                 };
@@ -236,19 +240,18 @@ where
     }
 }
 
-impl<K, I> NotificationProcessor for TimeoutManager<K, I>
+impl<K, T, M, SI> NotificationProcessor<T, Notification<K, M>> for TimeoutManager<K, SI>
 where
-    K: HashKind + KindExt<Input = I> + Copy,
-    I: Send + Sync + 'static + fmt::Debug,
+    K: HashKind + KindExt<Input = SI> + Copy,
+    SI: Send + Sync + 'static + fmt::Debug + Clone,
+    M: Message + GetTopic<T>,
 {
-    type Input = DefaultInput<K>;
-
-    fn init(&self) -> UnboundedSender<Self::Input> {
+    fn init(&self) -> UnboundedSender<Notification<K, M>> {
         self.init_inner()
     }
 
-    fn get_type(&self) -> <Self::Input as InputType>::Type {
-        DefaultType::Timeout
+    fn get_topics(&self) -> &[Topic<T>] {
+        &[Topic::Timeout]
     }
 }
 
@@ -265,8 +268,8 @@ mod tests {
 
     impl TestDefault for TimeoutManager<TestKind, TestInput> {
         fn test_default() -> Self {
-            let signal_queue = Arc::new(StreamableDeque::<Signal<TestKind, TestInput>>::new());
-            TimeoutManager::new(TEST_TICK_RATE, signal_queue)
+            let signal_queue = Arc::new(SignalQueue::new());
+            TimeoutManager::new(signal_queue).with_tick_rate(TEST_TICK_RATE)
         }
     }
 
@@ -274,9 +277,9 @@ mod tests {
     async fn timeout_to_signal() {
         let timeout_manager = TimeoutManager::test_default();
 
-        let timeout_tx = timeout_manager.init();
+        let timeout_tx: UnboundedSender<Notification<TestKind, TestMsg>> = timeout_manager.init();
 
-        let test_id = StateId::new(TestKind);
+        let test_id = StateId::new_rand(TestKind);
         let timeout_duration = Duration::from_millis(5);
 
         let timeout = Instant::now() + timeout_duration;
@@ -290,7 +293,9 @@ mod tests {
         let Signal { id, input } = timeout_manager.signal_queue.pop_front().unwrap();
         assert_eq!(test_id, id);
 
-        let TestInput::Timeout(signal_timeout) = input;
+        let TestInput::Timeout(signal_timeout) = input else {
+            panic!("{input:?}");
+        };
         assert!(
             signal_timeout >= timeout,
             "out[{signal_timeout:?}] >= in[{timeout:?}]"
@@ -301,9 +306,9 @@ mod tests {
     async fn timeout_cancellation() {
         let timeout_manager = TimeoutManager::test_default();
 
-        let timeout_tx = timeout_manager.init();
+        let timeout_tx: UnboundedSender<Notification<TestKind, TestMsg>> = timeout_manager.init();
 
-        let test_id = StateId::new(TestKind);
+        let test_id = StateId::new_rand(TestKind);
         let set_timeout = TimeoutInput::set_timeout_millis(test_id, 10);
 
         timeout_tx.send(set_timeout.into()).unwrap();
@@ -328,7 +333,7 @@ mod tests {
     async fn partial_timeout_cancellation() {
         let timeout_manager = TimeoutManager::test_default();
 
-        let timeout_tx = timeout_manager.init();
+        let timeout_tx: UnboundedSender<Notification<TestKind, TestMsg>> = timeout_manager.init();
 
         let id1 = StateId::new_with_u128(TestKind, 1);
         let id2 = StateId::new_with_u128(TestKind, 2); // gets cancelled

@@ -1,70 +1,92 @@
-use std::{collections::HashMap, fmt, hash::Hash, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt::{self, Debug},
+    hash::Hash,
+    sync::Arc,
+};
 
 use tokio::sync::mpsc::{self, UnboundedSender};
-use tracing::warn;
+use tracing::{debug, trace, warn};
 
 use bigerror::LogError;
 
 use crate::{manager::HashKind, timeout::TimeoutInput};
 
-/// Used to derive a marker used to route [`Notifications`]
+// represents custom Notifications that are sent to topics
+pub trait Message: fmt::Debug + Send + Sync + 'static
+where
+    Self: Send + Sync,
+{
+}
+
+impl<T> Message for T where T: fmt::Debug + Send + Sync + 'static {}
+
+/// Used to derive a marker used to route [`Notification`]s
 /// to [`NotificationProcessor`]s
-pub trait InputType: fmt::Debug {
-    type Type: fmt::Debug + Hash + Eq + PartialEq + 'static + Send + Sync;
-    fn get_type(&self) -> Self::Type;
+pub trait GetTopic<T>: fmt::Debug {
+    fn get_topic(&self) -> Topic<T>;
 }
 
-/// Default [`Notification`] input type
+// `()` is meant to be used for unused messages/msg topics
+impl GetTopic<()> for () {
+    fn get_topic(&self) -> Topic<()> {
+        Topic::Message(())
+    }
+}
+
+// routing logic for [`Notification`]s that implement
+// [`GetTopic`]
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-pub enum DefaultType {
+pub enum Topic<T> {
     Timeout,
-    Gateway,
+    Message(T),
 }
 
-#[derive(Debug)]
-pub enum DefaultInput<K>
+/// This is the analogue to [`super::node_state_machine::Signal`]
+/// that is meant to send messages to anything that is _not_ a
+/// state machine
+#[derive(Debug, Clone)]
+pub enum Notification<K, M>
 where
     K: HashKind,
+    M: Message,
 {
     Timeout(TimeoutInput<K>),
-    #[allow(unused_variables)]
-    Gateway,
+    Message(M),
 }
 
-impl<K> InputType for DefaultInput<K>
+impl<K, M, T> GetTopic<T> for Notification<K, M>
 where
+    M: Message + GetTopic<T>,
     K: HashKind,
 {
-    type Type = DefaultType;
-
-    fn get_type(&self) -> Self::Type {
+    fn get_topic(&self) -> Topic<T> {
         match self {
-            DefaultInput::Timeout(_) => DefaultType::Timeout,
-            DefaultInput::Gateway => DefaultType::Gateway,
+            Notification::Timeout(_) => Topic::Timeout,
+            Notification::Message(msg) => msg.get_topic(),
         }
     }
 }
 
-// --------------------------------------
-// TODO: turn this into a proc macro
-// https://crates.io/crates/enum-as-inner
-impl<K> TryInto<TimeoutInput<K>> for DefaultInput<K>
+impl<K, M> TryInto<TimeoutInput<K>> for Notification<K, M>
 where
     K: HashKind,
+    M: Message,
 {
     type Error = Self;
 
     fn try_into(self) -> Result<TimeoutInput<K>, Self::Error> {
-        if let DefaultInput::Timeout(input) = self {
+        if let Notification::Timeout(input) = self {
             return Ok(input);
         }
         Err(self)
     }
 }
 
-impl<K> From<TimeoutInput<K>> for DefaultInput<K>
+impl<K, M> From<TimeoutInput<K>> for Notification<K, M>
 where
     K: HashKind,
+    M: Message,
 {
     fn from(value: TimeoutInput<K>) -> Self {
         Self::Timeout(value)
@@ -72,46 +94,64 @@ where
 }
 // --------------------------------------
 
-/// This is the analogue to [`super::node_state_machine::Signal`]
-/// that is meant to send messages to anything that is _not_ a
-/// state machine
-#[derive(Debug)]
-pub struct Notification<I>(pub I)
-where
-    I: Send + Sync + fmt::Debug;
-
 /// [`NotificationManager`] routes [`Notifications`] to their desired
 /// destination
-pub struct NotificationManager<I>
+pub struct NotificationManager<T, N>
 where
-    I: Send + Sync + fmt::Debug + InputType,
+    N: Send + Sync + fmt::Debug + Clone + GetTopic<T>,
+    T: fmt::Debug + Hash + Eq + PartialEq + 'static + Copy,
 {
-    processors: Arc<HashMap<I::Type, UnboundedSender<I>>>,
+    processors: Arc<HashMap<Topic<T>, Vec<UnboundedSender<N>>>>,
 }
 
-impl<I> NotificationManager<I>
+impl<T, N> NotificationManager<T, N>
 where
-    I: Send + Sync + fmt::Debug + 'static + InputType,
+    T: fmt::Debug + Hash + Eq + PartialEq + 'static + Copy + Send + Sync,
+    N: Send + Sync + fmt::Debug + Clone + 'static + GetTopic<T>,
 {
-    pub fn new<const N: usize>(processors: [&dyn NotificationProcessor<Input = I>; N]) -> Self {
-        let processors: HashMap<I::Type, UnboundedSender<I>> = processors
-            .into_iter()
-            .map(|p| (p.get_type(), p.init()))
-            .collect();
+    pub fn new<const U: usize>(processors: [&dyn NotificationProcessor<T, N>; U]) -> Self {
+        let processors: HashMap<Topic<T>, Vec<UnboundedSender<N>>> =
+            processors
+                .into_iter()
+                .fold(HashMap::new(), |mut subscribers, processor| {
+                    let subscriber_tx = processor.init();
+                    for topic in processor.get_topics() {
+                        subscribers
+                            .entry(*topic)
+                            .or_default()
+                            .push(subscriber_tx.clone());
+                    }
+                    subscribers
+                });
         Self {
             processors: Arc::new(processors),
         }
     }
 
-    pub fn init(&self) -> UnboundedSender<Notification<I>> {
-        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Notification<I>>();
+    pub fn init(&self) -> UnboundedSender<N> {
+        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<N>();
         let processors = self.processors.clone();
         tokio::spawn(async move {
-            while let Some(Notification(input)) = input_rx.recv().await {
-                if let Some(processor_tx) = processors.get(&input.get_type()) {
-                    processor_tx.send(input).log_err();
+            debug!(spawning = "NotificationManager.processors");
+            while let Some(notification) = input_rx.recv().await {
+                trace!(?notification);
+                let topic = notification.get_topic();
+                if let Some(subscribers) = processors.get(&topic) {
+                    let Some((last, rest)) = subscribers.split_last() else {
+                        continue;
+                    };
+                    for tx in rest {
+                        tx.send(notification.clone()).log_attached_err(format!(
+                            "nm::processors send failed for topic {:?}",
+                            topic
+                        ));
+                    }
+                    last.send(notification).log_attached_err(format!(
+                        "nm::processors send last failed for topic {:?}",
+                        topic
+                    ));
                 } else {
-                    warn!(input_type = ?input.get_type(), "invalid type!");
+                    warn!(input_type = ?notification.get_topic(), ?notification, "invalid type!");
                 }
             }
         });
@@ -120,11 +160,12 @@ where
 }
 
 #[async_trait::async_trait]
-pub trait NotificationProcessor: Send + Sync {
-    type Input: Send + Sync + fmt::Debug + InputType;
-
-    fn init(&self) -> UnboundedSender<Self::Input>;
-    fn get_type(&self) -> <Self::Input as InputType>::Type;
+pub trait NotificationProcessor<T, N>: Send + Sync
+where
+    N: GetTopic<T>,
+{
+    fn init(&self) -> UnboundedSender<N>;
+    fn get_topics(&self) -> &[Topic<T>];
 }
 
 #[cfg(test)]
@@ -139,19 +180,29 @@ mod tests {
         use crate::timeout::*;
 
         let timeout_manager = TimeoutManager::test_default();
-        let notification_manager = NotificationManager::new([&timeout_manager]);
+        let timeout_manager_two = TimeoutManager::test_default();
+        let notification_manager: NotificationManager<TestTopic, Notification<_, TestMsg>> =
+            NotificationManager::new([&timeout_manager, &timeout_manager_two]);
         let notification_tx = notification_manager.init();
 
         let test_id = StateId::new_with_u128(TestKind, 1);
         // this should timeout instantly
         let timeout_duration = Duration::from_millis(1);
 
-        let set_timeout = Notification(TimeoutInput::set_timeout(test_id, timeout_duration).into());
-
+        let set_timeout =
+            Notification::Timeout(TimeoutInput::set_timeout(test_id, timeout_duration));
         notification_tx.send(set_timeout).unwrap();
 
         tokio::time::sleep(Duration::from_millis(10)).await;
 
-        assert!(timeout_manager.signal_queue.pop_front().is_some());
+        let timeout_one = timeout_manager
+            .signal_queue
+            .pop_front()
+            .expect("timeout one");
+        let timeout_two = timeout_manager_two
+            .signal_queue
+            .pop_front()
+            .expect("timeout two");
+        assert_eq!(timeout_one.id, timeout_two.id);
     }
 }

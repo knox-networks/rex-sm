@@ -5,6 +5,7 @@ use tokio::time::Instant;
 use tracing::error;
 use uuid::Uuid;
 
+pub mod ingress;
 pub mod manager;
 pub mod node;
 pub mod notification;
@@ -15,7 +16,7 @@ pub mod timeout;
 #[cfg(test)]
 mod test_support;
 
-pub use manager::{HashKind, Signal};
+pub use manager::{HashKind, Signal, SignalQueue};
 
 /// A trait representing a distinct zero sized state lifecycle
 pub trait State: fmt::Debug + Send + PartialEq {
@@ -47,6 +48,13 @@ pub trait State: fmt::Debug + Send + PartialEq {
     {
         self == &self.get_kind().failed_state()
     }
+    fn is_new(&self) -> bool
+    where
+        Self: Sized,
+        for<'a> &'a Self: PartialEq<&'a Self>,
+    {
+        self == &self.get_kind().new_state()
+    }
 }
 
 /// Represents an association of [`State`] enumerations
@@ -74,6 +82,15 @@ pub struct StateId<K: Kind> {
     pub uuid: Uuid,
 }
 
+impl<K> StateId<K>
+where
+    K: Kind + fmt::Debug,
+{
+    pub fn deref_uuid(&self) -> &Uuid {
+        &self.uuid
+    }
+}
+
 impl<K> std::ops::Deref for StateId<K>
 where
     K: Kind + fmt::Debug,
@@ -94,16 +111,18 @@ where
     }
 }
 
-#[cfg(any(feature = "test", test))]
 impl<K: Kind> StateId<K> {
-    pub fn new(kind: K) -> Self {
-        Self {
-            kind,
-            uuid: Uuid::new_v4(),
-        }
+    pub fn new(kind: K, uuid: Uuid) -> Self {
+        Self { kind, uuid }
+    }
+
+    #[cfg(any(feature = "test", test))]
+    pub fn new_rand(kind: K) -> Self {
+        Self::new(kind, Uuid::new_v4())
     }
     // for testing purposes, easily distinguish UUIDs
     // by numerical value
+    #[cfg(any(feature = "test", test))]
     pub fn new_with_u128(kind: K, v: u128) -> Self {
         Self {
             kind,

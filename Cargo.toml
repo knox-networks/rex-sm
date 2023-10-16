@@ -1,6 +1,6 @@
 [package]
 name = "rex-machina"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "The King Machine"
 license = "MIT"
@@ -11,14 +11,14 @@ path = "src/lib.rs"
 
 [dependencies]
 async-trait = "0.1.68"
-bigerror = "0.1.0"
+bigerror = "0.5.0"
 dashmap = "5.4.0"
 futures = "0.3.28"
 thiserror = "1.0.40"
-tokio = { version = "1.28.1", features = ["sync", "time", "rt"] }
+tokio = { version = "1.33", features = ["sync", "time", "rt", "macros"] }
 tokio-stream = "0.1.14"
-tracing = "0.1.37"
+tracing = "0.1"
 tracing-test = "0.2.4"
-uuid = "1.3.2"
+uuid = { version = "1.3", features = ["v4"] }
 # cargo add async-trait dashmap bigerror futures thiserror tokio-stream tracing tracing-test uuid
 # cargo add tokio --features sync,time

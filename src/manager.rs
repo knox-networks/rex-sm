@@ -46,14 +46,23 @@
 ```
 */
 
+use bigerror::{LogError, OptionReport};
 use std::{collections::HashMap, fmt, hash::Hash, sync::Arc, time::Duration};
+use tracing::debug;
 
-use tokio::sync::mpsc::{error::SendError, UnboundedSender};
+use tokio::sync::{
+    mpsc::{error::SendError, UnboundedSender},
+    Mutex,
+};
 use tokio_stream::StreamExt;
+use tracing::instrument;
 
 use crate::{
-    node::Update, notification::Notification, queue::StreamableDeque, storage::*,
-    timeout::TimeoutInput, Kind, KindExt, State, StateId,
+    node::{Node, Update},
+    queue::StreamableDeque,
+    storage::*,
+    timeout::TimeoutInput,
+    Kind, KindExt, State, StateId,
 };
 
 pub trait HashKind: Kind + fmt::Debug + Hash + Eq + PartialEq + 'static + Copy
@@ -77,7 +86,7 @@ impl<K> HashKind for K where
 /// The `input` field :
 /// * holds an event or message meant to be processed by a given state machine
 /// * an event is defined as any output emitted by a state machine
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Signal<K, I>
 where
     K: Kind,
@@ -97,6 +106,8 @@ where
     }
 }
 
+pub type SignalQueue<K, I> = StreamableDeque<Signal<K, I>>;
+
 /// [SignalExt] calls [`Signal::state_change`] to consume a [`Kind::State`] and emit
 /// a state change [`Signal`] with a valid [`StateMachine::Input`]
 pub trait SignalExt<K, I>
@@ -106,7 +117,7 @@ where
     fn signal_state_change(&self, id: StateId<K>, state: <K as Kind>::State);
 }
 
-impl<K, I> SignalExt<K, I> for StreamableDeque<Signal<K, I>>
+impl<K, I> SignalExt<K, I> for SignalQueue<K, I>
 where
     K: Kind + KindExt<Input = I>,
     I: Send + Sync + 'static + fmt::Debug,
@@ -127,9 +138,9 @@ where
     N: fmt::Debug + Send + Sync,
     K: HashKind,
 {
-    signal_queue: Arc<StreamableDeque<Signal<K, I>>>,
-    notification_queue: UnboundedSender<Notification<N>>,
-    state_store: Arc<NodeStore<StateId<K>, S>>,
+    pub signal_queue: Arc<SignalQueue<K, I>>,
+    pub notification_queue: UnboundedSender<N>,
+    pub state_store: Arc<NodeStore<StateId<K>, S>>,
 }
 
 impl<S, I, N, K> Clone for ProcessorContext<S, I, N, K>
@@ -157,8 +168,8 @@ where
     N: fmt::Debug + Send + Sync,
     K: HashKind,
 {
-    signal_queue: Arc<StreamableDeque<Signal<K, I>>>,
-    notification_queue: UnboundedSender<Notification<N>>,
+    signal_queue: Arc<SignalQueue<K, I>>,
+    notification_queue: UnboundedSender<N>,
     state_machines: Arc<HashMap<K, BoxedStateMachine<S, I, N, K>>>,
     state_store: Arc<NodeStore<StateId<K>, S>>,
 }
@@ -180,8 +191,8 @@ where
     // const fn does not currently support Iterable
     pub fn new<const U: usize>(
         state_machines: [BoxedStateMachine<S, I, N, K>; U],
-        signal_queue: Arc<StreamableDeque<Signal<K, I>>>,
-        notification_queue: UnboundedSender<Notification<N>>,
+        signal_queue: Arc<SignalQueue<K, I>>,
+        notification_queue: UnboundedSender<N>,
     ) -> Self {
         let state_machines: HashMap<K, BoxedStateMachine<S, I, N, K>> = state_machines
             .into_iter()
@@ -199,11 +210,18 @@ where
         let sm_dispatcher = self.state_machines.clone();
         let ctx = self.context();
         tokio::spawn(async move {
+            debug!(target:  "state_machine", spawning = "StateMachineManager.signal_queue");
             let mut stream = stream_queue.stream();
             while let Some(signal) = stream.next().await {
                 let Signal { id, input } = signal;
-                let state_machine = sm_dispatcher.get(&id).unwrap();
-                state_machine.process(ctx.clone(), id, input).await;
+                let Ok(sm) = sm_dispatcher
+                    .get(&id)
+                    .ok_or_not_found_kv("state_machine", id)
+                    .and_log_err()
+                else {
+                    continue;
+                };
+                sm.process(ctx.clone(), id, input).await;
             }
         });
     }
@@ -271,6 +289,16 @@ where
     S: State + fmt::Debug + Send + 'static + Copy,
     N: fmt::Debug + Send + Sync + From<TimeoutInput<K>>,
 {
+    /// NOTE [`StateMachineExt::new`] is created without a hierarchy
+    fn create_entry(&self, ctx: &ProcessorContext<S, Self::Input, N, K>, id: StateId<K>) {
+        ctx.state_store
+            .insert_entry(id, Arc::new(Mutex::new(Node::new(id))))
+    }
+
+    fn has_entry(&self, ctx: &ProcessorContext<S, Self::Input, N, K>, id: StateId<K>) -> bool {
+        ctx.state_store.get(id).is_some()
+    }
+
     async fn fail(&self, ctx: &ProcessorContext<S, Self::Input, N, K>, id: StateId<K>) {
         self.update_state_and_signal(ctx, id, id.failed_state())
             .await
@@ -298,14 +326,19 @@ where
         state: S,
     ) {
         let Some(mut entry) = self.get_entry(ctx, id).await else {
-                // TODO propagate error
-                tracing::error!(?id, "Entry not found!");
-                panic!("missing entry");
-            };
+            // TODO propagate error
+            tracing::error!(?id, "Entry not found!");
+            panic!("missing entry");
+        };
 
         if let Some(id) = entry.update_and_get_parent_id(Update { id, state }) {
             ctx.signal_queue.signal_state_change(id, state);
         }
+    }
+
+    #[instrument(skip_all, fields(?notification))]
+    fn notify(&self, ctx: &ProcessorContext<S, Self::Input, N, K>, notification: N) {
+        ctx.notification_queue.send(notification).log_err();
     }
 
     fn set_timeout(
@@ -313,9 +346,9 @@ where
         ctx: &ProcessorContext<S, Self::Input, N, K>,
         id: StateId<K>,
         duration: Duration,
-    ) -> Result<(), SendError<Notification<N>>> {
+    ) -> Result<(), SendError<N>> {
         ctx.notification_queue
-            .send(Notification(TimeoutInput::set_timeout(id, duration).into()))
+            .send(TimeoutInput::set_timeout(id, duration).into())
     }
 
     fn set_timeout_millis(
@@ -323,19 +356,18 @@ where
         ctx: &ProcessorContext<S, Self::Input, N, K>,
         id: StateId<K>,
         millis: u64,
-    ) -> Result<(), SendError<Notification<N>>> {
-        ctx.notification_queue.send(Notification(
-            TimeoutInput::set_timeout_millis(id, millis).into(),
-        ))
+    ) -> Result<(), SendError<N>> {
+        ctx.notification_queue
+            .send(TimeoutInput::set_timeout_millis(id, millis).into())
     }
 
     fn cancel_timeout(
         &self,
         ctx: &ProcessorContext<S, Self::Input, N, K>,
         id: StateId<K>,
-    ) -> Result<(), SendError<Notification<N>>> {
+    ) -> Result<(), SendError<N>> {
         ctx.notification_queue
-            .send(Notification(TimeoutInput::cancel_timeout(id).into()))
+            .send(TimeoutInput::cancel_timeout(id).into())
     }
 }
 
@@ -358,6 +390,7 @@ mod tests {
         node::{Insert, Node},
         notification::{self, NotificationManager},
         storage::NodeStore,
+        test_support::TestMsg,
         timeout::{TimeoutManager, TEST_TICK_RATE, TEST_TIMEOUT},
         KindExt,
     };
@@ -366,7 +399,7 @@ mod tests {
     use tokio::{sync::mpsc, time::Instant};
     use tracing::*;
 
-    type NotificationInput = notification::DefaultInput<ComponentKind>;
+    type NotificationInput = notification::Notification<ComponentKind, TestMsg>;
 
     #[derive(Clone, Debug)]
     pub struct Packet {
@@ -539,9 +572,9 @@ mod tests {
 
             match input {
                 MenuInput::Play(who_sleeps) => {
-                    let ping_id = StateId::new(ComponentKind::Ping);
-                    let pong_id = StateId::new(ComponentKind::Pong);
-                    // Menu + Ping +  Pong
+                    let ping_id = StateId::new_rand(ComponentKind::Ping);
+                    let pong_id = StateId::new_rand(ComponentKind::Pong);
+                    // Menu + Ping + Pong
                     let menu_tree = Node::new(id)
                         .into_insert(Insert {
                             parent_id: Some(id),
@@ -772,7 +805,7 @@ mod tests {
         );
         manager.init();
 
-        let menu_id = StateId::new(ComponentKind::Menu);
+        let menu_id = StateId::new_rand(ComponentKind::Menu);
         manager.signal_queue.push_back(Signal {
             id: menu_id,
             input: Input::Menu(MenuInput::Play(WhoSleeps(None))),
@@ -812,10 +845,10 @@ mod tests {
     #[tracing_test::traced_test]
     async fn state_machine_timeout() {
         let signal_queue = Arc::new(StreamableDeque::new());
-        let notification_manager = NotificationManager::new([&TimeoutManager::new(
-            TEST_TICK_RATE / 2, // apply a 0.5 ms tick rate
-            signal_queue.clone(),
-        )]);
+        let notification_manager =
+            NotificationManager::new([
+                &TimeoutManager::new(signal_queue.clone()).with_tick_rate(TEST_TICK_RATE / 2)
+            ]);
 
         let menu_sm = MenuStateMachine::new();
         let menu_failures = menu_sm.failures.clone();
@@ -831,7 +864,7 @@ mod tests {
 
         manager.init();
 
-        let menu_id = StateId::new(ComponentKind::Menu);
+        let menu_id = StateId::new_rand(ComponentKind::Menu);
         manager.signal_queue.push_back(Signal {
             id: menu_id,
             input: Input::Menu(MenuInput::Play(WhoSleeps(Some(ComponentKind::Ping)))),
@@ -861,7 +894,7 @@ mod tests {
         assert_eq!(MenuInput::FailedPong, *menu_failures.get(&menu_id).unwrap());
 
         // Now fail due to Ping
-        let menu_id = StateId::new(ComponentKind::Menu);
+        let menu_id = StateId::new_rand(ComponentKind::Menu);
         manager.signal_queue.push_back(Signal {
             id: menu_id,
             input: Input::Menu(MenuInput::Play(WhoSleeps(Some(ComponentKind::Pong)))),

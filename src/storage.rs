@@ -34,18 +34,14 @@ impl<S, K> NodeStore<StateId<K>, S>
 where
     K: HashKind,
 {
-    pub fn new_entry(node: Node<StateId<K>, S>) -> Entry<K, S> {
-        Arc::new(Mutex::new(node))
-    }
-
     pub fn new() -> Self {
         Self {
             trees: DashMap::new(),
         }
     }
 
-    pub fn insert_node(&self, id: StateId<K>, node: Node<StateId<K>, S>) {
-        self.trees.insert(id, Self::new_entry(node));
+    pub fn new_entry(node: Node<StateId<K>, S>) -> Entry<K, S> {
+        Arc::new(Mutex::new(node))
     }
 
     // insert entry creates a new reference to the same node
