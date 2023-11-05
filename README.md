@@ -65,7 +65,6 @@ Two outputs:
 * routing `Signal`s to the appropriate state machines
 * Injecting `ProcessorContext`s into the state machines: this action is what allows state machines to cycle concurrently
 
-https://github.com/knox-networks/core/blob/67f7dc6ac57f5c6650d82ce0019e65a31278ae93/common/src/state_machine/node_state_machine.rs#L65-L74
 
 ### `NodeStore` is responsible for:
 * inserting & updating various state hierarchies
@@ -75,7 +74,6 @@ https://github.com/knox-networks/core/blob/67f7dc6ac57f5c6650d82ce0019e65a31278a
 * Create multiple indices (Through fresh `DashMap` key insertions) pointing to the same tree by incrementing the `Arc` count and inserting a new entry per child node
 * Allows independent interior mutability per state tree, decoupling unrelated states from resource contention
 
-https://github.com/knox-networks/core/blob/67f7dc6ac57f5c6650d82ce0019e65a31278ae93/common/src/state_machine/storage.rs#L10-L16
 
 
 ## Node based `TimeoutManager` (in development)
@@ -90,12 +88,9 @@ Considerations:
 
 Approach:
 * `TimeoutManager` implements a per tick polling approach to resolving
-  timeouts:
-  https://github.com/knox-networks/core/blob/83d57647e38a55c5cfecacca8c89ebe98d45ab68/common/src/state_machine/timeout.rs#L170-L193
-* TimeoutManager accepts two types of inputs, set and cancel (timeout):
-  https://github.com/knox-networks/core/blob/83d57647e38a55c5cfecacca8c89ebe98d45ab68/common/src/state_machine/timeout.rs#L85-L89
-* Timeouts are stored within the `TimeoutLedger`:
-  https://github.com/knox-networks/core/blob/83d57647e38a55c5cfecacca8c89ebe98d45ab68/common/src/state_machine/timeout.rs#L25-L32
+  timeouts
+* TimeoutManager accepts two types of inputs, set and cancel (timeout)
+* Timeouts are stored within the `TimeoutLedger`
 * `TimeoutLedger` contains a `BTreeMap` that indexes IDs by `Instant` and a
   `HashMap` that indexes `Instant`s by ID This double indexing allows timeout
   cancellations to go through without providing the `Instant` that they were
