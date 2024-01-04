@@ -1,4 +1,4 @@
-## Generic State Machine Manager
+# rex-sm :crown:
 
 ### Design Features
 - Make state machines modular units that can be reused
