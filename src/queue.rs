@@ -6,10 +6,12 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     task::{Context, Poll, Waker},
 };
+
+use parking_lot::Mutex;
 
 // Contains a waker for a given stream
 // as well as a boolean determining whether
@@ -83,7 +85,7 @@ impl<T> StreamableDeque<T> {
 
     /// Push an item into the queue and notify first receiver
     pub fn push_front(&self, item: T) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner.front_values.push_back(item);
         // Notify first receiver in queue
         inner.notify_rx();
@@ -91,7 +93,7 @@ impl<T> StreamableDeque<T> {
 
     /// Push an item into the back of the queue and notify first receiver
     pub fn push_back(&self, item: T) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner.back_values.push_back(item);
         // Notify first receiver in queue
         inner.notify_rx();
@@ -108,7 +110,7 @@ impl<T> StreamableDeque<T> {
 
     #[cfg(test)]
     pub(crate) fn pop_front(&self) -> Option<T> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner
             .front_values
             .pop_front()
@@ -117,7 +119,7 @@ impl<T> StreamableDeque<T> {
 
     #[cfg(test)]
     pub(crate) fn pop_back(&self) -> Option<T> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner
             .back_values
             .pop_back()
@@ -135,7 +137,7 @@ impl<'a, T> Stream for StreamReceiver<'a, T> {
     type Item = T;
 
     fn poll_next(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Option<Self::Item>> {
-        let mut inner = self.queue.inner.lock().unwrap();
+        let mut inner = self.queue.inner.lock();
 
         let value = inner
             .front_values
@@ -169,7 +171,7 @@ impl<'a, T> Drop for StreamReceiver<'a, T> {
         let awake = self.awake.take().map(|w| w.load(Ordering::Relaxed));
 
         if let Some(true) = awake {
-            let mut queue_wakers = self.queue.inner.lock().unwrap();
+            let mut queue_wakers = self.queue.inner.lock();
             // StreamReceiver was woken by a None, notify another
             if let Some(n) = queue_wakers.rx_notifiers.pop_front() {
                 n.awake.store(true, Ordering::Relaxed);

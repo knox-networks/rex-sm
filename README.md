@@ -38,7 +38,9 @@ data or notifications to outside the state machine group.
 ## Goals
 
 * decoupling state machine input processing from a given **state’s current enumerations**
-* state signaling that all feeds into the same sink (the manager’s `signal_queue`) ; this allows lifts and transits to be processed **homogeneously** thus avoiding type opacity through `Box<dyn Signal>`
+* state signaling that all feeds into the same sink (the manager’s
+`signal_queue`) ; this allows lifts and transits to be processed
+**homogeneously** thus avoiding type opacity through `Box<dyn Signal>`
 
 
 ## In practice the design should give at most three message streams connected to a particular state machine down:
@@ -56,8 +58,8 @@ Two outputs:
 * `Notification` output (events meant to be processed by _anything_ that is not a state machine fed by a given `signal_queue`)
 
 
-### The new `StateMachineManager` owns:
-* The state storage layer (using `NodeStorage`)
+### The `StateMachineManager` owns:
+* The state storage layer (using `StateStore`)
 * the input event stream
 * The state machine processors
 
@@ -66,11 +68,11 @@ Two outputs:
 * Injecting `ProcessorContext`s into the state machines: this action is what allows state machines to cycle concurrently
 
 
-### `NodeStore` is responsible for:
+### `StateStore` is responsible for:
 * inserting & updating various state hierarchies
 * operations are done concurrently by holding all node trees in `Arc<Mutex<_>>` containers.
 
-### This allows `NodeStore` storage to:
+### This allows `StateStore` storage to:
 * Create multiple indices (Through fresh `DashMap` key insertions) pointing to the same tree by incrementing the `Arc` count and inserting a new entry per child node
 * Allows independent interior mutability per state tree, decoupling unrelated states from resource contention
 

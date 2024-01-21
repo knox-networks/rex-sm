@@ -5,11 +5,11 @@
 * A state machine is created in three parts and in this sequence:
   1. `StateId`: creates a routable 'pointer' to the state machine
   2. `State`: creates the state enumerable (data that holds state transitions, starting with `Kind<State = OurState>::new_state()`)
-  3. `storage::Entry`: commits the state enumerable and allows it to be updated
+  3. `storage::Tree`: commits the state enumerable and allows it to be updated
 
 ### Responsibility
 * If a state machine has a parent, it is the **parent's responsibility to create the initial state and entry for the child state machine**
-* A child state machine should **not** `StateMachineExt::create_entry` if a parent is involved
+* A child state machine should **not** `StateMachineExt::create_tree` if a parent is involved
 * A parent state machine is responsible for route creation in the child's `StateRouter`
 * A state machine parent is responsible for all three steps in spawning a child state machine:
 
@@ -29,10 +29,10 @@
             id: pong_id,
         });
 
-    // 3. create `storage::Entry`
-    let entry = NodeStore::new_entry(menu_tree);
+    // 3. create `storage::Tree`
+    let tree = StateStore::new_tree(menu_tree);
     for id in [id, ping_id, pong_id] {
-        ctx.state_store.insert_entry(id, entry.clone());
+        ctx.state_store.insert_tree(id, tree.clone());
     }
 
     // signal to Ping state machine
@@ -54,7 +54,7 @@ impl StateMachine<OuterKind, TestState, NotificationInput>
 
     async fn process(
         &self,
-        ctx: ProcessorContext<TestState, Self::Input, NotificationInput, OuterKind>,
+        ctx: ProcessorContext<OuterKind>,
         id: StateId<OuterKind>,
         input: outer::Input,
     ) {
@@ -105,7 +105,7 @@ impl StateMachine<OuterKind, TestState, NotificationInput>
 
     async fn process(
         &self,
-        ctx: ProcessorContext<TestState, Self::Input, NotificationInput, OuterKind>,
+        ctx: ProcessorContext<OuterKind>,
         id: StateId<OuterKind>,
         input: outer::Input,
     ) {
@@ -125,17 +125,17 @@ impl StateMachine<OuterKind, TestState, NotificationInput>
     fn parse_state_with_input(
         state: Option<outer::State>,
         input: &inner::Input,
-    ) -> Result<our::State, Report<ContractError>> {
+    ) -> Result<our::State, Report<OurError>> {
         match (state, input) {
             // 1.
             (Some(s), _) if Self::invalid_state(s) => {
-                Err(InvalidStatus::with_kv_debug("state", s).change_context(ContractError))
+                Err(InvalidStatus::with_kv_debug("state", s).change_context(OurError))
             }
             // 2.
             (None, Input::New(_, _)) => Ok(State::default()),
             // 3.
-            (None, _) => Err(InvalidInput::attach("contract::State does not exist")
-                .change_context(ContractError)),
+            (None, _) => Err(InvalidInput::attach("our::State does not exist")
+                .change_context(OurError)),
             // 4.
             (Some(outer::State::Ours(s)), _) => Ok(s),
             // 5.
@@ -166,10 +166,10 @@ impl TestStateMachine<OuterKind> {
         state: State,
     ) -> Result<(), Error> {
         match input {
-            // this input is for creating `storage::Entry`
+            // this input is for creating `storage::Tree`
             // for a state machine _without_ a parent
             Input::New(_field_only_used_by_router, data) => {
-                self.create_entry(&ctx, id);
+                self.create_tree(&ctx, id);
                 // ◊ this creation logic is shared with `Input::SendData`
                 // if the input was generated from a parent state machine
                 // signal
@@ -183,7 +183,7 @@ impl TestStateMachine<OuterKind> {
                 // and thus these things _already_ exist:
                 // 1. `StateId`
                 // 2. `State`
-                // 3. `storage::Entry`
+                // 3. `storage::Tree`
                 if let Some(data) = some_data {
                     // ◊ this creation logic is shared with `Input::New`
                     self.insert_data(id, data.clone());
@@ -215,7 +215,7 @@ impl TestStateMachine<OuterKind> {
     ) -> Result<(), Error> {
         match input {
             Input::New(data, metadata) => {
-                self.create_entry(&ctx, id);
+                self.create_tree(&ctx, id);
                 // ◊ this creation logic is shared with `Input::SendData`
                 // if the input was generated from a parent state machine
                 // signal
@@ -239,7 +239,7 @@ by `TestStateMachine` to unblock the hot path of state machine input processing
 ### 5. No `Input` should be processed by a state that is failed or completed
 <!-- TODO add details -->
 * completed and failed states persist as a matter of convenience for any input producers
-* Logic that depends on failed states will behave nondetermenistically because they depend upon `NodeStore` _not_ doing garbage collection on finished states
+* Logic that depends on failed states will behave nondetermenistically because they depend upon `StateStore` _not_ doing garbage collection on finished states
 
 The proper location for this type of logic should depend on data stored  as a result of a `Notification` produced from a failed or completed state
 
@@ -256,7 +256,7 @@ impl TestStateMachine<TxnKind, TxnState, NotificationInput>
 
     async fn process(
         &self,
-        ctx: ProcessorContext<TxnState, Self::Input, NotificationInput, TxnKind>,
+        ctx: ProcessorContext<TxnKind>,
         id: StateId<TxnKind>,
         input: Self::Input,
     ) {

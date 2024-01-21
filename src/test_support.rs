@@ -3,18 +3,19 @@ use tokio::time::Instant;
 
 use crate::{
     ingress::StateRouter,
-    notification::{GetTopic, Notification, Topic},
+    notification::{GetTopic, RexMessage},
+    timeout::TimeoutInput,
     StateId, StateMachineError,
 };
 
-use super::{Kind, KindExt, State};
+use super::{Kind, Rex, State};
 
 #[macro_export]
 macro_rules! node_state {
     ($( $name: ident ),*) => {
         $(
         #[allow(dead_code)]
-        #[derive(Clone, Debug, Eq, PartialEq)]
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         pub enum $name {
             New,
             Awaiting,
@@ -28,7 +29,7 @@ macro_rules! node_state {
             $( $name, )*
         }
 
-        #[derive(Clone, Debug, Eq, PartialEq)]
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         pub enum NodeState {
             $( $name($name), )*
         }
@@ -67,26 +68,33 @@ macro_rules! node_state {
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub enum TestTopic {
+    Timeout,
     Ingress,
     Other,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum TestMsg {
+    TimeoutInput(TimeoutInput<TestKind>),
     Ingress(OutPacket),
     Other,
 }
 
+impl RexMessage for TestMsg {
+    type Topic = TestTopic;
+}
+
 impl GetTopic<TestTopic> for TestMsg {
-    fn get_topic(&self) -> Topic<TestTopic> {
+    fn get_topic(&self) -> TestTopic {
         match self {
-            TestMsg::Ingress(_) => Topic::Message(TestTopic::Ingress),
-            TestMsg::Other => Topic::Message(TestTopic::Other),
+            TestMsg::TimeoutInput(_) => TestTopic::Timeout,
+            TestMsg::Ingress(_) => TestTopic::Ingress,
+            TestMsg::Other => TestTopic::Other,
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TestState {
     New,
     Awaiting,
@@ -131,8 +139,9 @@ pub struct OutPacket(pub Vec<u8>);
 #[derive(Clone, Debug, PartialEq)]
 pub struct InPacket(pub Vec<u8>);
 
-impl KindExt for TestKind {
+impl Rex for TestKind {
     type Input = TestInput;
+    type Message = TestMsg;
 
     fn state_input(&self, _state: <Self as Kind>::State) -> Option<Self::Input> {
         unimplemented!()
@@ -179,19 +188,36 @@ impl TryFrom<InPacket> for TestInput {
     }
 }
 
-impl TryFrom<Notification<TestKind, TestMsg>> for OutPacket {
+impl TryInto<OutPacket> for TestMsg {
     type Error = Report<ConversionError>;
 
-    fn try_from(value: Notification<TestKind, TestMsg>) -> Result<Self, Self::Error> {
-        if let Notification::Message(TestMsg::Ingress(packet)) = value {
+    fn try_into(self) -> Result<OutPacket, Self::Error> {
+        if let Self::Ingress(packet) = self {
             return Ok(packet);
         }
-        Err(ConversionError::attach_debug(value))
+        Err(ConversionError::attach_debug(self))
     }
 }
 
-impl From<OutPacket> for Notification<TestKind, TestMsg> {
+impl TryInto<TimeoutInput<TestKind>> for TestMsg {
+    type Error = Report<ConversionError>;
+
+    fn try_into(self) -> Result<TimeoutInput<TestKind>, Self::Error> {
+        if let Self::TimeoutInput(timeout) = self {
+            return Ok(timeout);
+        }
+        Err(ConversionError::attach_debug(self))
+    }
+}
+
+impl From<OutPacket> for TestMsg {
     fn from(val: OutPacket) -> Self {
-        Notification::Message(TestMsg::Ingress(val))
+        TestMsg::Ingress(val)
+    }
+}
+
+impl From<TimeoutInput<TestKind>> for TestMsg {
+    fn from(value: TimeoutInput<TestKind>) -> Self {
+        TestMsg::TimeoutInput(value)
     }
 }

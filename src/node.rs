@@ -4,7 +4,7 @@ use crate::{Kind, State};
 
 impl<Id, K> Kind for Id
 where
-    K: Kind + fmt::Debug,
+    K: Kind,
     Id: std::ops::Deref<Target = K> + Send + fmt::Debug,
 {
     type State = K::State;
@@ -40,7 +40,7 @@ pub struct Node<Id, S> {
 
 impl<Id, S> Node<Id, S>
 where
-    S: State + fmt::Debug,
+    S: State,
     Id: Copy + Eq + PartialEq + Hash + fmt::Display + Kind<State = S> + fmt::Debug,
 {
     pub fn new(id: Id) -> Self {
@@ -204,7 +204,7 @@ pub struct Zipper<Id, S> {
 
 impl<Id, S> Zipper<Id, S>
 where
-    S: State + fmt::Debug,
+    S: State,
     Id: Copy + Eq + PartialEq + Hash + fmt::Display + Kind<State = S> + fmt::Debug,
 {
     fn by_id(mut self, id: Id) -> Zipper<Id, S> {

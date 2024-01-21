@@ -7,22 +7,65 @@ use std::{
     time::Duration,
 };
 
+use parking_lot::Mutex;
 use tokio::{
-    sync::{
-        mpsc::{self, UnboundedSender},
-        Mutex,
-    },
+    sync::mpsc::{self, UnboundedSender},
     time::Instant,
 };
-use tracing::{debug, warn};
+use tracing::{debug, error, instrument, warn, Instrument};
 
 use crate::{
     manager::{HashKind, Signal, SignalQueue},
-    notification::{GetTopic, Message, Notification, NotificationProcessor, Topic},
-    Kind, KindExt, StateId,
+    notification::{self, Notification, NotificationProcessor, RexMessage, UnaryRequest},
+    Kind, Rex, StateId,
 };
 
-const DEFAULT_TIMEOUT_TICK_RATE: Duration = Duration::from_millis(5);
+pub trait TimeoutMessage<K: Rex>: RexMessage + From<UnaryRequest<K, Self::Op>> {
+    type Op: notification::Operation;
+}
+
+pub const DEFAULT_TICK_RATE: Duration = Duration::from_millis(5);
+const SHORT_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub struct DisplayDuration(pub Duration);
+impl std::fmt::Display for DisplayDuration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", hms_string(self.0))
+    }
+}
+
+impl From<Duration> for DisplayDuration {
+    fn from(duration: Duration) -> Self {
+        Self(duration)
+    }
+}
+
+/// convert a [`Duration`] into a "0H00m00s" string
+fn hms_string(duration: Duration) -> String {
+    if duration.is_zero() {
+        return "ZERO".to_string();
+    }
+    let s = duration.as_secs();
+    let ms = duration.subsec_millis();
+    // if only milliseconds available
+    if s == 0 {
+        return format!("{ms}ms");
+    }
+    // Grab total hours from seconds
+    let (h, s) = (s / 3600, s % 3600);
+    let (m, s) = (s / 60, s % 60);
+
+    let mut hms = String::new();
+    if h != 0 {
+        hms += &format!("{h:02}H");
+    }
+    if m != 0 {
+        hms += &format!("{m:02}m");
+    }
+    hms += &format!("{s:02}s");
+
+    hms
+}
 
 /// TimeoutLedger` contains a [`BTreeMap`] that uses [`Instant`]s to time out
 /// specific [`StateId`]s and a [`HashMap`] that indexes `Instant`s by [`StateId`].
@@ -51,12 +94,24 @@ where
 
     // set timeout for a given instant and associate it with a given id
     // remove old instants associated with the same id if they exist
+    #[instrument(skip_all, fields(%id))]
     fn set_timeout(&mut self, id: StateId<K>, instant: Instant) {
+        let now = Instant::now();
+        if instant < now {
+            error!("requested timeout is in the past");
+        }
+        let duration = instant - now;
+        if duration <= SHORT_TIMEOUT {
+            warn!(duration = %DisplayDuration(instant - now), "setting short timeout");
+        } else {
+            debug!(duration = %DisplayDuration(instant - now), "setting timeout");
+        }
+
         if let Some(old_instant) = self.ids.insert(id, instant) {
             // remove older reference to id
             // if instants differ
             if old_instant != instant {
-                debug!(?id, "renewing timeout");
+                debug!(%id, "renewing timeout");
                 self.timers.get_mut(&old_instant).map(|set| set.remove(&id));
             }
         }
@@ -85,7 +140,7 @@ where
             if matches!(removed_id, None | Some(false)) {
                 warn!("timers[{instant:?}][{id}] not found, cancellation ignored");
             } else {
-                debug!(?id, "cancelled timeout");
+                debug!(%id, "cancelled timeout");
             }
         }
     }
@@ -95,6 +150,16 @@ where
 pub enum Operation {
     Cancel,
     Set(Instant),
+}
+
+impl std::fmt::Display for Operation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let op = match self {
+            Operation::Cancel => "timeout::Cancel",
+            Operation::Set(_) => "timeout::Set",
+        };
+        write!(f, "{op}")
+    }
 }
 
 impl Operation {
@@ -107,18 +172,12 @@ impl Operation {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct TimeoutInput<K>
-where
-    K: HashKind,
-{
-    pub(crate) id: StateId<K>,
-    pub(crate) op: Operation,
-}
+pub type TimeoutInput<K> = UnaryRequest<K, Operation>;
 
-impl<K> TimeoutInput<K>
+impl<K> UnaryRequest<K, Operation>
 where
-    K: HashKind,
+    K: Rex,
+    K::Message: From<UnaryRequest<K, Operation>>,
 {
     pub fn set_timeout_millis(id: StateId<K>, millis: u64) -> Self {
         Self {
@@ -151,30 +210,35 @@ where
     }
 }
 
-/// Processes incoming [`TimeoutInput`]s and modifies the [`TimeoutLedger`]
+/// Processes incoming [`Operation`]s and modifies the [`TimeoutLedger`]
 /// through a polling loop.
-pub struct TimeoutManager<K, SI>
+pub struct TimeoutManager<K>
 where
-    K: HashKind,
-    SI: Send + Sync + 'static + fmt::Debug + Clone,
+    K: Rex,
 {
     // the interval at which  the TimeoutLedger checks for timeouts
     tick_rate: Duration,
     ledger: Arc<Mutex<TimeoutLedger<K>>>,
+    topic: <K::Message as RexMessage>::Topic,
 
-    pub(crate) signal_queue: Arc<SignalQueue<K, SI>>,
+    pub(crate) signal_queue: Arc<SignalQueue<K>>,
 }
 
-impl<K, SI> TimeoutManager<K, SI>
+impl<K> TimeoutManager<K>
 where
-    K: HashKind + KindExt<Input = SI> + Copy,
-    SI: Send + Sync + 'static + fmt::Debug + Clone,
+    K: Rex,
+    K::Message: TryInto<TimeoutInput<K>>,
+    <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
 {
-    pub fn new(signal_queue: Arc<SignalQueue<K, SI>>) -> Self {
+    pub fn new(
+        signal_queue: Arc<SignalQueue<K>>,
+        topic: impl Into<<K::Message as RexMessage>::Topic>,
+    ) -> Self {
         Self {
-            tick_rate: DEFAULT_TIMEOUT_TICK_RATE,
+            tick_rate: DEFAULT_TICK_RATE,
             signal_queue,
             ledger: Arc::new(Mutex::new(TimeoutLedger::new())),
+            topic: topic.into(),
         }
     }
 
@@ -182,78 +246,108 @@ where
         Self { tick_rate, ..self }
     }
 
-    pub fn init_inner<M: Message>(&self) -> UnboundedSender<Notification<K, M>> {
-        let (input_tx, mut input_rx) = mpsc::unbounded_channel();
+    pub fn init_inner(&self) -> UnboundedSender<Notification<K::Message>> {
+        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Notification<K::Message>>();
         let in_ledger = self.ledger.clone();
 
-        tokio::spawn(async move {
-            debug!(target: "state_machine", spawning = "TimeoutManager.notification_tx");
-            while let Some(notification) = input_rx.recv().await {
-                let Notification::Timeout(TimeoutInput { id, op }) = notification else {
-                    warn!("Invalid input");
-                    continue;
-                };
-                let mut ledger = in_ledger.lock().await;
-                match op {
-                    Operation::Cancel => {
-                        ledger.cancel_timeout(id);
+        tokio::spawn(
+            async move {
+                debug!(target: "state_machine", spawning = "TimeoutManager.notification_tx");
+                while let Some(Notification(msg)) = input_rx.recv().await {
+                    match msg.try_into() {
+                        Ok(UnaryRequest { id, op }) => {
+                            let mut ledger = in_ledger.lock();
+                            match op {
+                                Operation::Cancel => {
+                                    ledger.cancel_timeout(id);
+                                }
+                                Operation::Set(instant) => {
+                                    ledger.set_timeout(id, instant);
+                                }
+                            }
+                        }
+                        Err(_e) => {
+                            warn!("Invalid input");
+                            continue;
+                        }
                     }
-                    Operation::Set(instant) => {
-                        ledger.set_timeout(id, instant);
+                    /*
+                    let Notification::Timeout(TimeoutInput { id, op }) = notification else {
+                        warn!("Invalid input");
+                        continue;
+                    };
+                    let mut ledger = in_ledger.lock();
+                    match op {
+                        Operation::Cancel => {
+                            ledger.cancel_timeout(id);
+                        }
+                        Operation::Set(instant) => {
+                            ledger.set_timeout(id, instant);
+                        }
                     }
+                    */
                 }
             }
-        });
+            .in_current_span(),
+        );
 
         let timer_ledger = self.ledger.clone();
-        let tick_rate = self.tick_rate;
+        let mut interval = tokio::time::interval(self.tick_rate);
         let signal_queue = self.signal_queue.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(tick_rate).await;
+        tokio::spawn(
+            async move {
+                loop {
+                    interval.tick().await;
 
-                let now = Instant::now();
-                let mut ledger = timer_ledger.lock().await;
-                // Get all instants where `instant <= now`
-                let expired: Vec<Instant> = ledger.timers.range(..=now).map(|(k, _)| *k).collect();
+                    let now = Instant::now();
+                    let mut ledger = timer_ledger.lock();
+                    // Get all instants where `instant <= now`
+                    let expired: Vec<Instant> =
+                        ledger.timers.range(..=now).map(|(k, _)| *k).collect();
 
-                for id in expired
-                    .iter()
-                    .filter_map(|t| ledger.timers.remove(t))
-                    .flat_map(|set| set.into_iter())
-                    .collect::<Vec<_>>()
-                {
-                    warn!(?id, "timed out");
-                    ledger.ids.remove(&id);
-                    if let Some(input) = id.timeout_input(now) {
-                        // caveat with this push_front setup is
-                        // that later timeouts will be on top of the stack
-                        signal_queue.push_front(Signal { id, input });
-                    } else {
-                        warn!("timeout not supported!");
+                    for id in expired
+                        .iter()
+                        .filter_map(|t| ledger.timers.remove(t))
+                        .flat_map(|set| set.into_iter())
+                        .collect::<Vec<_>>()
+                    {
+                        warn!(%id, "timed out");
+                        ledger.ids.remove(&id);
+                        if let Some(input) = id.timeout_input(now) {
+                            // caveat with this push_front setup is
+                            // that later timeouts will be on top of the stack
+                            signal_queue.push_front(Signal { id, input });
+                        } else {
+                            warn!("timeout not supported!");
+                        }
                     }
                 }
             }
-        });
+            .in_current_span(),
+        );
 
         input_tx
     }
 }
 
-impl<K, T, M, SI> NotificationProcessor<T, Notification<K, M>> for TimeoutManager<K, SI>
+impl<K> NotificationProcessor<K::Message> for TimeoutManager<K>
 where
-    K: HashKind + KindExt<Input = SI> + Copy,
-    SI: Send + Sync + 'static + fmt::Debug + Clone,
-    M: Message + GetTopic<T>,
+    K: Rex,
+    K::Message: TryInto<TimeoutInput<K>>,
+    <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
 {
-    fn init(&self) -> UnboundedSender<Notification<K, M>> {
+    fn init(&self) -> UnboundedSender<Notification<K::Message>> {
         self.init_inner()
     }
 
-    fn get_topics(&self) -> &[Topic<T>] {
-        &[Topic::Timeout]
+    fn get_topics(&self) -> &[<K::Message as RexMessage>::Topic] {
+        std::slice::from_ref(&self.topic)
     }
 }
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+pub struct TimeoutTopic;
 
 #[cfg(test)]
 pub(crate) const TEST_TICK_RATE: Duration = Duration::from_millis(1);
@@ -266,10 +360,10 @@ mod tests {
     use super::*;
     use crate::{test_support::*, TestDefault};
 
-    impl TestDefault for TimeoutManager<TestKind, TestInput> {
+    impl TestDefault for TimeoutManager<TestKind> {
         fn test_default() -> Self {
             let signal_queue = Arc::new(SignalQueue::new());
-            TimeoutManager::new(signal_queue).with_tick_rate(TEST_TICK_RATE)
+            TimeoutManager::new(signal_queue, TestTopic::Timeout).with_tick_rate(TEST_TICK_RATE)
         }
     }
 
@@ -277,15 +371,17 @@ mod tests {
     async fn timeout_to_signal() {
         let timeout_manager = TimeoutManager::test_default();
 
-        let timeout_tx: UnboundedSender<Notification<TestKind, TestMsg>> = timeout_manager.init();
+        let timeout_tx: UnboundedSender<Notification<TestMsg>> = timeout_manager.init();
 
         let test_id = StateId::new_rand(TestKind);
         let timeout_duration = Duration::from_millis(5);
 
         let timeout = Instant::now() + timeout_duration;
-        let set_timeout = TimeoutInput::set_timeout(test_id, timeout_duration);
+        let set_timeout = UnaryRequest::set_timeout(test_id, timeout_duration);
 
-        timeout_tx.send(set_timeout.into()).unwrap();
+        timeout_tx
+            .send(Notification(TestMsg::TimeoutInput(set_timeout)))
+            .unwrap();
 
         // ensure two ticks have passed
         tokio::time::sleep(timeout_duration * 3).await;
@@ -306,19 +402,23 @@ mod tests {
     async fn timeout_cancellation() {
         let timeout_manager = TimeoutManager::test_default();
 
-        let timeout_tx: UnboundedSender<Notification<TestKind, TestMsg>> = timeout_manager.init();
+        let timeout_tx: UnboundedSender<Notification<TestMsg>> = timeout_manager.init();
 
         let test_id = StateId::new_rand(TestKind);
-        let set_timeout = TimeoutInput::set_timeout_millis(test_id, 10);
+        let set_timeout = UnaryRequest::set_timeout_millis(test_id, 10);
 
-        timeout_tx.send(set_timeout.into()).unwrap();
+        timeout_tx
+            .send(Notification(TestMsg::TimeoutInput(set_timeout)))
+            .unwrap();
 
         tokio::time::sleep(Duration::from_millis(2)).await;
-        let cancel_timeout = TimeoutInput {
+        let cancel_timeout = UnaryRequest {
             id: test_id,
             op: Operation::Cancel,
         };
-        timeout_tx.send(cancel_timeout.into()).unwrap();
+        timeout_tx
+            .send(Notification(TestMsg::TimeoutInput(cancel_timeout)))
+            .unwrap();
 
         // wait out the rest of the duration and 3 ticks
         tokio::time::sleep(Duration::from_millis(3) + TEST_TICK_RATE * 2).await;
@@ -333,7 +433,7 @@ mod tests {
     async fn partial_timeout_cancellation() {
         let timeout_manager = TimeoutManager::test_default();
 
-        let timeout_tx: UnboundedSender<Notification<TestKind, TestMsg>> = timeout_manager.init();
+        let timeout_tx: UnboundedSender<Notification<TestMsg>> = timeout_manager.init();
 
         let id1 = StateId::new_with_u128(TestKind, 1);
         let id2 = StateId::new_with_u128(TestKind, 2); // gets cancelled
@@ -343,29 +443,40 @@ mod tests {
         let now = Instant::now();
         let timeout = now + timeout_duration;
         let early_timeout = timeout - Duration::from_millis(2);
-        let set_timeout = TimeoutInput {
+        let set_timeout = UnaryRequest {
             id: id1,
             op: Operation::Set(timeout),
         };
 
-        timeout_tx.send(set_timeout.into()).unwrap();
-        timeout_tx.send(set_timeout.with_id(id2).into()).unwrap();
-        timeout_tx.send(set_timeout.with_id(id3).into()).unwrap();
+        timeout_tx
+            .send(Notification(TestMsg::TimeoutInput(set_timeout)))
+            .unwrap();
+        timeout_tx
+            .send(Notification(TestMsg::TimeoutInput(
+                set_timeout.with_id(id2),
+            )))
+            .unwrap();
+        timeout_tx
+            .send(Notification(TestMsg::TimeoutInput(
+                set_timeout.with_id(id3),
+            )))
+            .unwrap();
 
         //id1 should timeout after 5 milliseconds
         // ...
         // id2 cancellation
         timeout_tx
-            .send(set_timeout.with_id(id2).with_op(Operation::Cancel).into())
+            .send(Notification(TestMsg::TimeoutInput(
+                set_timeout.with_id(id2).with_op(Operation::Cancel),
+            )))
             .unwrap();
         // id3 should timeout 2 milliseconds earlier than id1
         timeout_tx
-            .send(
+            .send(Notification(TestMsg::TimeoutInput(
                 set_timeout
                     .with_id(id3)
-                    .with_op(Operation::Set(early_timeout))
-                    .into(),
-            )
+                    .with_op(Operation::Set(early_timeout)),
+            )))
             .unwrap();
 
         tokio::time::sleep(timeout_duration * 3).await;

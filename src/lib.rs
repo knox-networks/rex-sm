@@ -16,10 +16,19 @@ pub mod timeout;
 #[cfg(test)]
 mod test_support;
 
-pub use manager::{HashKind, Signal, SignalQueue};
+pub use manager::{
+    HashKind, RexBuilder, Signal, SignalExt, SignalQueue, SmContext, StateMachine, StateMachineExt,
+    StateMachineManager,
+};
+pub use notification::{
+    GetTopic, Notification, NotificationManager, NotificationProcessor, Operation, Request,
+    RequestInner, RexMessage, RexTopic, Subscriber, UnaryRequest,
+};
 
-/// A trait representing a distinct zero sized state lifecycle
-pub trait State: fmt::Debug + Send + PartialEq {
+/// A trait for types representing state machine lifecycles. These types should be field-less
+/// enumerations or enumerations whose variants only contain field-less enumerations; note that
+/// `Copy` is a required supertrait.
+pub trait State: fmt::Debug + Send + PartialEq + Copy {
     fn get_kind(&self) -> &dyn Kind<State = Self>;
     fn fail(&mut self)
     where
@@ -55,21 +64,55 @@ pub trait State: fmt::Debug + Send + PartialEq {
     {
         self == &self.get_kind().new_state()
     }
+
+    /// represents a state that will no longer change
+    fn is_terminal(&self) -> bool
+    where
+        Self: Sized,
+    {
+        self.is_failed() || self.is_completed()
+    }
+
+    /// `&dyn Kind<State = Self>` cannot do direct partial comparison
+    /// due to type opacity
+    /// so State::new_state(self) is called to allow a vtable lookup
+    fn kind_eq(&self, kind: &dyn Kind<State = Self>) -> bool
+    where
+        Self: Sized,
+    {
+        self.get_kind().new_state() == kind.new_state()
+    }
 }
 
-/// Represents an association of [`State`] enumerations
-/// Used to define the scope for [`node_state_machine::Signal`]s
-/// cycled through a [`node_state_machine::StateMachineManager`]
+/// Acts as a discriminant between various [`State`] enumerations, similar to
+/// [`std::mem::Discriminant`].
+/// Used to define the scope for [`Signal`]s cycled through a [`StateMachineManager`].
 pub trait Kind: fmt::Debug + Send {
-    type State;
+    type State: State;
     fn new_state(&self) -> Self::State;
     fn failed_state(&self) -> Self::State;
     fn completed_state(&self) -> Self::State;
 }
 
-/// Extends [`Kind`] behaviour to include operations involving [`Signal`] `input`s
-pub trait KindExt: Kind {
-    type Input;
+/// Titular trait of the library that enables Hierarchical State Machine (HSM for short) behaviour.
+/// Makes sending [`Signal`]s (destined to become a [`StateMachine`]'s input)
+/// and [`Notification`]s (a [`NotificationProcessor`]'s input) possible.
+///
+/// The [`Rex`] trait defines the _scope_ of interaction that exists between one or more
+/// [`StateMachine`]s and zero or more [`NotificationProcessor`]s.
+/// Below is a diagram displaying the associated
+/// type hierarchy defined by validly implementing the [`Kind`] and [`Rex`] traits,
+/// double colons`::` directed down and right represent type associations:
+/// ```text
+///            Topic
+///            ::
+/// Kind -> Rex::Message
+/// ::      ::      ::
+/// State   Input   Topic
+/// ```
+pub trait Rex: Kind + HashKind {
+    type Input: Send + Sync + 'static + fmt::Debug;
+    type Message: RexMessage;
     fn state_input(&self, state: <Self as Kind>::State) -> Option<Self::Input>;
     fn timeout_input(&self, instant: Instant) -> Option<Self::Input>;
 }
@@ -82,18 +125,9 @@ pub struct StateId<K: Kind> {
     pub uuid: Uuid,
 }
 
-impl<K> StateId<K>
-where
-    K: Kind + fmt::Debug,
-{
-    pub fn deref_uuid(&self) -> &Uuid {
-        &self.uuid
-    }
-}
-
 impl<K> std::ops::Deref for StateId<K>
 where
-    K: Kind + fmt::Debug,
+    K: Kind,
 {
     type Target = K;
 
@@ -104,10 +138,10 @@ where
 
 impl<K> fmt::Display for StateId<K>
 where
-    K: Kind + fmt::Debug,
+    K: Kind,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
+        write!(f, "({:?}<{}>)", self.kind, self.uuid)
     }
 }
 
@@ -116,7 +150,6 @@ impl<K: Kind> StateId<K> {
         Self { kind, uuid }
     }
 
-    #[cfg(any(feature = "test", test))]
     pub fn new_rand(kind: K) -> Self {
         Self::new(kind, Uuid::new_v4())
     }

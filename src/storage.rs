@@ -1,21 +1,21 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use parking_lot::FairMutex;
 
-use crate::{manager::HashKind, node::Node, StateId};
+use crate::{node::Node, Kind, Rex, StateId};
 
-/// [`NodeStore`] is the storage layer for all state machines associated with a given manager.
+/// [`StateStore`] is the storage layer for all state machines associated with a given manager.
 /// Every state tree is associated with a particular Mutex
 /// this allows separate state hirearchies to be acted upon concurrently
 /// while making operations in a particular tree blocking
-pub struct NodeStore<Id, S> {
-    pub trees: DashMap<Id, Arc<Mutex<Node<Id, S>>>>,
+pub struct StateStore<Id, S> {
+    pub trees: DashMap<Id, Arc<FairMutex<Node<Id, S>>>>,
 }
 
-impl<S, K> Default for NodeStore<StateId<K>, S>
+impl<K> Default for StateStore<StateId<K>, K::State>
 where
-    K: HashKind,
+    K: Rex,
 {
     fn default() -> Self {
         Self::new()
@@ -23,38 +23,34 @@ where
 }
 
 /// Entries are distinguished from Nodes
-/// by the [`Arc<Mutex<_>>`] that contains a given node.
+/// by the [`Arc<FairMutex<_>>`] that contains a given node.
 /// Every child node in a particular tree should have
-/// should be represented by `N` additional [`StoreEntry`]s
-/// in a given [`NodeStore`] indexed by that particular node's `id` field.
-type Entry<K, S> = Arc<Mutex<Node<StateId<K>, S>>>;
-pub(crate) type OwnedEntry<K, S> = OwnedMutexGuard<Node<StateId<K>, S>>;
+/// should be represented by `N` additional [`StoreTree`]s
+/// in a given [`StateStore`] indexed by that particular node's `id` field.
+pub(crate) type Tree<K> = Arc<FairMutex<Node<StateId<K>, <K as Kind>::State>>>;
 
-impl<S, K> NodeStore<StateId<K>, S>
-where
-    K: HashKind,
-{
+impl<K: Rex> StateStore<StateId<K>, K::State> {
     pub fn new() -> Self {
         Self {
             trees: DashMap::new(),
         }
     }
 
-    pub fn new_entry(node: Node<StateId<K>, S>) -> Entry<K, S> {
-        Arc::new(Mutex::new(node))
+    pub fn new_tree(node: Node<StateId<K>, K::State>) -> Tree<K> {
+        Arc::new(FairMutex::new(node))
     }
 
-    // insert entry creates a new reference to the same node
-    pub fn insert_entry(&self, id: StateId<K>, entry: Entry<K, S>) {
-        self.trees.insert(id, entry);
+    // insert node creates a new reference to the same node
+    pub fn insert_ref(&self, id: StateId<K>, node: Tree<K>) {
+        self.trees.insert(id, node);
     }
 
     // decrements the reference count on a given `Node`
-    pub fn remove_entry(&self, id: StateId<K>) {
+    pub fn remove_ref(&self, id: StateId<K>) {
         self.trees.remove(&id);
     }
 
-    pub fn get(&self, id: StateId<K>) -> Option<Entry<K, S>> {
+    pub fn get_tree(&self, id: StateId<K>) -> Option<Tree<K>> {
         let node = self.trees.get(&id);
         node.map(|n| n.value().clone())
     }

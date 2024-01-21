@@ -1,14 +1,14 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
-use bigerror::{Report, ResultIntoContext};
+use bigerror::{IntoContext, Report};
 use tokio::sync::mpsc::{self, UnboundedSender};
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, trace, warn, Instrument};
 
 use crate::{
     manager::{HashKind, Signal, SignalQueue},
-    notification::{GetTopic, Message, Notification, NotificationProcessor, Topic},
+    notification::{Notification, NotificationProcessor, RexMessage},
     queue::StreamableDeque,
-    StateId, StateMachineError,
+    Rex, StateId, StateMachineError,
 };
 use bigerror::{ConversionError, LogError};
 
@@ -24,19 +24,20 @@ where
     fn get_kind(&self) -> K;
 }
 
-type BoxedStateRouter<K, In> = Box<dyn StateRouter<K, Inbound = In>>;
+pub type BoxedStateRouter<K, In> = Box<dyn StateRouter<K, Inbound = In>>;
 
 /// top level router that holds all [`Kind`] indexed [`StateRouter`]s
 pub struct PacketRouter<K, In>(HashMap<K, BoxedStateRouter<K, In>>)
 where
     K: HashKind;
 
-impl<'a, K, P: 'a> PacketRouter<K, P>
+impl<K, P> PacketRouter<K, P>
 where
-    K: HashKind + TryFrom<&'a P, Error = Report<ConversionError>>,
+    for<'a> K: HashKind + TryFrom<&'a P, Error = Report<ConversionError>>,
 {
-    fn get_id(&self, packet: &'a P) -> Result<Option<StateId<K>>, Report<StateMachineError>> {
-        let kind = K::try_from(packet).into_ctx()?;
+    fn get_id(&self, packet: &P) -> Result<Option<StateId<K>>, Report<StateMachineError>> {
+        let kind = K::try_from(packet);
+        let kind = kind.map_err(|e| e.into_ctx())?;
         let Some(router) = self.0.get(&kind) else {
             return Ok(None);
         };
@@ -45,47 +46,53 @@ where
 }
 
 /// Represents a bidirectional network connection
-pub struct IngressAdapter<K, SI, In, Out, T, const U: usize>
+pub struct IngressAdapter<K, In, Out>
 where
-    K: HashKind,
-    SI: Send + Sync + fmt::Debug,
+    K: Rex,
     In: Send + Sync + fmt::Debug,
     Out: Send + Sync + fmt::Debug,
 {
     outbound_tx: UnboundedSender<Out>,
-    signal_queue: Arc<StreamableDeque<Signal<K, SI>>>,
+    signal_queue: Arc<StreamableDeque<Signal<K>>>,
     router: Arc<PacketRouter<K, In>>,
     // Option<P> is used to guard against
     // an invalid <IngressAdapter as NotificationProcessor>::init (one where
     // IngressAdapter::init_packet_processor was not called)
     inbound_tx: Option<UnboundedSender<In>>,
-    topics: [Topic<T>; U],
+    topic: <K::Message as RexMessage>::Topic,
 }
 
-impl<K, SI, In, Out, T, const U: usize> IngressAdapter<K, SI, In, Out, T, U>
+impl<K, In, Out> IngressAdapter<K, In, Out>
 where
-    for<'a> K: HashKind + TryFrom<&'a In, Error = Report<ConversionError>>,
-    SI: Send + Sync + fmt::Debug + TryFrom<In, Error = Report<ConversionError>> + 'static,
+    K: Rex,
+    for<'a> K: TryFrom<&'a In, Error = Report<ConversionError>>,
+    K::Input: TryFrom<In, Error = Report<ConversionError>>,
+    K::Message: TryInto<Out, Error = Report<ConversionError>>,
     In: Send + Sync + fmt::Debug + 'static,
     Out: Send + Sync + fmt::Debug + 'static,
 {
-    pub fn new<const N: usize>(
-        signal_queue: Arc<SignalQueue<K, SI>>,
+    pub fn new(
+        signal_queue: Arc<SignalQueue<K>>,
         outbound_tx: UnboundedSender<Out>,
-        state_routers: [BoxedStateRouter<K, In>; N],
-        topics: [Topic<T>; U],
+        state_routers: Vec<BoxedStateRouter<K, In>>,
+        topic: impl Into<<K::Message as RexMessage>::Topic>,
     ) -> Self {
-        let state_routers: HashMap<K, BoxedStateRouter<K, In>> = state_routers
-            .into_iter()
-            .map(|r| (r.get_kind(), r))
-            .collect();
+        let mut router_map: HashMap<K, BoxedStateRouter<K, In>> = HashMap::new();
+        for router in state_routers {
+            if let Some(old_router) = router_map.insert(router.get_kind(), router) {
+                panic!(
+                    "Found multiple routers for kind: {:?}",
+                    old_router.get_kind()
+                );
+            }
+        }
 
         Self {
             signal_queue,
             outbound_tx,
-            router: Arc::new(PacketRouter(state_routers)),
+            router: Arc::new(PacketRouter(router_map)),
             inbound_tx: None,
-            topics,
+            topic: topic.into(),
         }
     }
 
@@ -95,82 +102,81 @@ where
         let router = self.router.clone();
         let signal_queue = self.signal_queue.clone();
         let (packet_tx, mut packet_rx) = mpsc::unbounded_channel::<In>();
-        let _nw_handle = tokio::spawn(async move {
-            debug!(target: "state_machine", spawning = "IngressAdapter.packet_tx");
-            while let Some(packet) = packet_rx.recv().await {
-                trace!("receiving packet");
-                let id = match router.get_id(&packet) {
-                    Err(e) => {
-                        error!(err = ?e, ?packet, "could not get id from router");
-                        continue;
-                    }
-                    Ok(None) => {
-                        warn!(?packet, "unable to route packet");
-                        continue;
-                    }
-                    Ok(Some(state_id)) => state_id,
-                };
-                SI::try_from(packet)
-                    .map(|input| {
-                        signal_queue.push_back(Signal { id, input });
-                    })
-                    .log_attached_err("ia::processors from packet failed");
+        let _nw_handle = tokio::spawn(
+            async move {
+                debug!(target: "state_machine", spawning = "IngressAdapter.packet_tx");
+                while let Some(packet) = packet_rx.recv().await {
+                    trace!("receiving packet");
+                    let id = match router.get_id(&packet) {
+                        Err(e) => {
+                            error!(err = ?e, ?packet, "could not get id from router");
+                            continue;
+                        }
+                        Ok(None) => {
+                            warn!(?packet, "unable to route packet");
+                            continue;
+                        }
+                        Ok(Some(state_id)) => state_id,
+                    };
+                    K::Input::try_from(packet)
+                        .map(|input| {
+                            signal_queue.push_back(Signal { id, input });
+                        })
+                        .log_attached_err("ia::processors from packet failed");
+                }
             }
-        });
+            .in_current_span(),
+        );
         self.inbound_tx = Some(packet_tx.clone());
 
         packet_tx
     }
 
-    pub fn init_notification_processor<N>(&self) -> UnboundedSender<N>
-    where
-        N: TryInto<Out, Error = Report<ConversionError>> + Send + 'static + fmt::Debug,
-    {
+    pub fn init_notification_processor(&self) -> UnboundedSender<Notification<K::Message>> {
         debug!("starting IngressAdapter notification_tx");
         self.inbound_tx
             .as_ref()
             .expect("IngressAdapter did not initialize packet_tx!");
 
-        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<N>();
+        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Notification<K::Message>>();
         let outbound_tx = self.outbound_tx.clone();
 
-        let _notification_handle = tokio::spawn(async move {
-            debug!(target: "state_machine", spawning = "IngressAdapter.notification_tx");
-            while let Some(notification) = input_rx.recv().await {
-                notification
-                    .try_into()
-                    .map(|packet| {
-                        trace!("sending packet");
-                        outbound_tx.send(packet).log_err();
-                    })
-                    .log_attached_err("Invalid input");
+        let _notification_handle = tokio::spawn(
+            async move {
+                debug!(target: "state_machine", spawning = "IngressAdapter.notification_tx");
+                while let Some(notification) = input_rx.recv().await {
+                    notification
+                        .0
+                        .try_into()
+                        .map(|packet| {
+                            trace!("sending packet");
+                            outbound_tx.send(packet).log_err();
+                        })
+                        .log_attached_err("Invalid input");
+                }
             }
-        });
+            .in_current_span(),
+        );
 
         input_tx
     }
 }
 
-impl<K, T, M, SI, In, Out, const U: usize> NotificationProcessor<T, Notification<K, M>>
-    for IngressAdapter<K, SI, In, Out, T, U>
+impl<K, In, Out> NotificationProcessor<K::Message> for IngressAdapter<K, In, Out>
 where
-    for<'a> K: HashKind + TryFrom<&'a In, Error = Report<ConversionError>>,
-    SI: Send + Sync + fmt::Debug + TryFrom<In, Error = Report<ConversionError>> + 'static,
-    M: Message + GetTopic<T>,
-    T: Send + Sync + 'static,
+    K: Rex,
+    for<'a> K: TryFrom<&'a In, Error = Report<ConversionError>>,
+    K::Input: TryFrom<In, Error = Report<ConversionError>>,
+    K::Message: TryInto<Out, Error = Report<ConversionError>>,
     In: Send + Sync + fmt::Debug + 'static,
-    Out: Send
-        + Sync
-        + fmt::Debug
-        + TryFrom<Notification<K, M>, Error = Report<ConversionError>>
-        + 'static,
+    Out: Send + Sync + fmt::Debug + 'static,
 {
-    fn init(&self) -> UnboundedSender<Notification<K, M>> {
+    fn init(&self) -> UnboundedSender<Notification<K::Message>> {
         self.init_notification_processor()
     }
 
-    fn get_topics(&self) -> &[Topic<T>] {
-        &self.topics
+    fn get_topics(&self) -> &[<K::Message as RexMessage>::Topic] {
+        std::slice::from_ref(&self.topic)
     }
 }
 
@@ -185,7 +191,7 @@ mod tests {
     use crate::{notification::NotificationManager, test_support::*, StateId, TestDefault};
 
     type TestIngressAdapter = (
-        IngressAdapter<TestKind, TestInput, InPacket, OutPacket, TestTopic, 1>,
+        IngressAdapter<TestKind, InPacket, OutPacket>,
         UnboundedReceiver<OutPacket>,
     );
 
@@ -197,8 +203,8 @@ mod tests {
             let nw_adapter = IngressAdapter::new(
                 signal_queue,
                 outbound_tx,
-                [Box::new(TestStateRouter)],
-                [Topic::Message(TestTopic::Ingress)],
+                vec![Box::new(TestStateRouter)],
+                TestTopic::Ingress,
             );
             (nw_adapter, outbound_rx)
         }
@@ -210,22 +216,24 @@ mod tests {
         let (mut nw_adapter, mut network_rx) = TestIngressAdapter::test_default();
         let _inbound_tx = nw_adapter.init_packet_processor();
 
-        let notification_manager: NotificationManager<TestTopic, Notification<_, TestMsg>> =
-            NotificationManager::new([&nw_adapter]);
+        let notification_manager: NotificationManager<TestMsg> =
+            NotificationManager::new(&[&nw_adapter]);
         let notification_tx = notification_manager.init();
 
         let unknown_packet = OutPacket(b"unknown_packet".to_vec());
 
         // Any packet should get to the GatewayClient since routing rules
         // are only used at the ingress of the state machine
-        notification_tx.send(unknown_packet.clone().into()).unwrap();
+        notification_tx
+            .send(Notification(unknown_packet.clone().into()))
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(1)).await;
         assert_eq!(Ok(unknown_packet), network_rx.try_recv());
 
         let unsupported_packet = OutPacket(b"unsupported_packet".to_vec());
 
         notification_tx
-            .send(unsupported_packet.clone().into())
+            .send(Notification(unsupported_packet.clone().into()))
             .unwrap();
         tokio::time::sleep(Duration::from_millis(1)).await;
         assert_eq!(Ok(unsupported_packet), network_rx.try_recv());
@@ -241,8 +249,8 @@ mod tests {
 
         let inboud_tx = nw_adapter.init_packet_processor();
 
-        let notification_manager: NotificationManager<TestTopic, Notification<_, TestMsg>> =
-            NotificationManager::new([&nw_adapter]);
+        let notification_manager: NotificationManager<TestMsg> =
+            NotificationManager::new(&[&nw_adapter]);
         let _notification_tx = notification_manager.init();
 
         // An unknown packet should be unrouteable
