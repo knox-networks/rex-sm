@@ -43,8 +43,8 @@
     ```
 
 ## State machine input:
-### 1. A state machine should do parsing/unwrapping in `<TestStateMachine as StateMachine>::process` before passing in a valid state and input
-to a `TestStateMachine::process_inner`:
+
+### 1. A state machine should do parsing/unwrapping in `<TestStateMachine as StateMachine>::process` before passing in a valid state and input to a `TestStateMachine::process_inner`:
 
 ```rust
 impl StateMachine<OuterKind, TestState, NotificationInput>
@@ -144,8 +144,10 @@ impl StateMachine<OuterKind, TestState, NotificationInput>
             }
         }
     }
+```
 
 ### 3. A state machine should not have an input that is _exclusive_ to parent signals:
+
 ```rust
 impl StateMachine<OuterKind, TestState, NotificationInput>
     for TestStateMachine<OuterKind>
