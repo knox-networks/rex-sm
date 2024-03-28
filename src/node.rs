@@ -314,9 +314,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{node_state, Kind, State, StateId};
-
     use super::*;
+    use crate::{node_state, Kind, State, StateId};
 
     node_state!(Alice, Bob, Charlie, Dave, Eve);
 

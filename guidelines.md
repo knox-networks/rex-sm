@@ -125,17 +125,17 @@ impl StateMachine<OuterKind, TestState, NotificationInput>
     fn parse_state_with_input(
         state: Option<outer::State>,
         input: &inner::Input,
-    ) -> Result<our::State, Report<OurError>> {
+    ) -> Result<our::State, Report<ContractError>> {
         match (state, input) {
             // 1.
             (Some(s), _) if Self::invalid_state(s) => {
-                Err(InvalidStatus::with_kv_debug("state", s).change_context(OurError))
+                Err(InvalidStatus::with_kv_dbg("state", s).change_context(ContractError))
             }
             // 2.
             (None, Input::New(_, _)) => Ok(State::default()),
             // 3.
-            (None, _) => Err(InvalidInput::attach("our::State does not exist")
-                .change_context(OurError)),
+            (None, _) => Err(InvalidInput::attach("contract::State does not exist")
+                .change_context(ContractError)),
             // 4.
             (Some(outer::State::Ours(s)), _) => Ok(s),
             // 5.

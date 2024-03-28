@@ -46,24 +46,25 @@
 ```
 */
 
+use std::{collections::HashMap, fmt, hash::Hash, sync::Arc, time::Duration};
+
 use async_trait::async_trait;
 use bigerror::{LogError, OptionReport};
-use std::{collections::HashMap, fmt, hash::Hash, sync::Arc, time::Duration};
-use tracing::{debug, Instrument};
-
 use parking_lot::FairMutex;
 use tokio::{
     sync::mpsc::{error::SendError, UnboundedSender},
-    task::AbortHandle,
+    task::JoinSet,
 };
 use tokio_stream::StreamExt;
+use tracing::{debug, Instrument};
 
 use crate::{
     node::{Insert, Node, Update},
     notification::{Notification, NotificationManager, NotificationProcessor, RexMessage},
     queue::StreamableDeque,
     storage::*,
-    timeout::{self, TimeoutInput, TimeoutManager},
+    timeout,
+    timeout::{TimeoutInput, TimeoutManager},
     Kind, Rex, State, StateId,
 };
 
@@ -242,7 +243,7 @@ where
         self
     }
 
-    pub fn build_and_init(mut self) -> (SmContext<K>, AbortHandle) {
+    fn build(mut self, join_set: &mut JoinSet<()>) -> SmContext<K> {
         if let Some(topic) = self.timeout_topic {
             let timeout_manager = TimeoutManager::new(self.signal_queue.clone(), topic)
                 .with_tick_rate(self.tick_rate.unwrap_or(timeout::DEFAULT_TICK_RATE));
@@ -254,15 +255,27 @@ where
             .map(|processor| processor.as_ref())
             .collect();
 
-        let notification_manager = NotificationManager::new(processors.as_slice());
+        let notification_manager = NotificationManager::new(processors.as_slice(), join_set);
         let notification_queue: UnboundedSender<Notification<K::Message>> =
-            notification_manager.init();
+            notification_manager.init(join_set);
 
         let smm =
             StateMachineManager::new(self.state_machines, self.signal_queue, notification_queue);
 
-        let handle = smm.init();
-        (smm.context(), handle)
+        smm.init(join_set);
+        smm.context()
+    }
+
+    pub fn build_and_init_with_handle(self, join_set: &mut JoinSet<()>) -> SmContext<K> {
+        self.build(join_set)
+    }
+
+    pub fn build_and_init(self) -> SmContext<K> {
+        let mut join_set = JoinSet::new();
+        let ctx = self.build(&mut join_set);
+        join_set.detach_all();
+
+        ctx
     }
 }
 
@@ -296,18 +309,18 @@ where
         }
     }
 
-    pub fn init(&self) -> AbortHandle {
+    pub fn init(&self, join_set: &mut JoinSet<()>) {
         let stream_queue = self.signal_queue.clone();
         let sm_dispatcher = self.state_machines.clone();
         let ctx = self.context();
-        let handle = tokio::spawn(
+        join_set.spawn(
             async move {
                 debug!(target:  "state_machine", spawning = "StateMachineManager.signal_queue");
                 let mut stream = stream_queue.stream();
                 while let Some(Signal { id, input }) = stream.next().await {
                     let Ok(sm) = sm_dispatcher
                         .get(&id)
-                        .ok_or_not_found_kv("state_machine", id)
+                        .expect_kv("state_machine", id)
                         .and_log_err()
                     else {
                         continue;
@@ -317,7 +330,6 @@ where
             }
             .in_current_span(),
         );
-        handle.abort_handle()
     }
 }
 
@@ -472,10 +484,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::time::Duration;
 
+    use bigerror::{ConversionError, Report};
+    use dashmap::DashMap;
+    use tokio::{sync::mpsc, time::Instant};
+    use tracing::*;
+
+    use super::*;
     use crate::{
         node::{Insert, Node},
         notification::GetTopic,
@@ -483,11 +499,6 @@ mod tests {
         timeout::{TimeoutTopic, TEST_TICK_RATE, TEST_TIMEOUT},
         Rex,
     };
-
-    use bigerror::{ConversionError, Report};
-    use dashmap::DashMap;
-    use tokio::{sync::mpsc, time::Instant};
-    use tracing::*;
 
     impl From<TimeoutInput<ComponentKind>> for GameMsg {
         fn from(value: TimeoutInput<ComponentKind>) -> Self {
@@ -906,6 +917,7 @@ mod tests {
     async fn state_machine() {
         // This test does not initialize the NotificationManager
         let (notification_tx, _notification_rx) = mpsc::unbounded_channel();
+        let mut join_set = JoinSet::new();
 
         let signal_queue = Arc::new(StreamableDeque::new());
         let manager = StateMachineManager::new(
@@ -917,7 +929,7 @@ mod tests {
             signal_queue,
             notification_tx,
         );
-        manager.init();
+        manager.init(&mut join_set);
 
         let menu_id = StateId::new_rand(ComponentKind::Menu);
         manager.signal_queue.push_back(Signal {
@@ -962,7 +974,7 @@ mod tests {
 
         let menu_sm = MenuStateMachine::new();
         let menu_failures = menu_sm.failures.clone();
-        let (ctx, _abort_handle) = RexBuilder::new(signal_queue.clone())
+        let ctx = RexBuilder::new(signal_queue.clone())
             .with_sm(menu_sm)
             .with_sm(PingStateMachine)
             .with_sm(PongStateMachine)

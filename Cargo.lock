@@ -66,9 +66,9 @@ dependencies = [
 
 [[package]]
 name = "bigerror"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d39f27f8a2c56aae480f6d7af7bc0680b5223aaecf99f11b5a60484a0192b24"
+checksum = "d6d841a61e15b10baa24d671701b4453933bc11b86239bc8d419a9f5e1aad5c9"
 dependencies = [
  "error-stack",
  "thiserror",

@@ -9,14 +9,16 @@ use std::{
 
 use parking_lot::Mutex;
 use tokio::{
-    sync::mpsc::{self, UnboundedSender},
+    sync::{mpsc, mpsc::UnboundedSender},
+    task::JoinSet,
     time::Instant,
 };
 use tracing::{debug, error, instrument, warn, Instrument};
 
 use crate::{
     manager::{HashKind, Signal, SignalQueue},
-    notification::{self, Notification, NotificationProcessor, RexMessage, UnaryRequest},
+    notification,
+    notification::{Notification, NotificationProcessor, RexMessage, UnaryRequest},
     Kind, Rex, StateId,
 };
 
@@ -247,10 +249,20 @@ where
     }
 
     pub fn init_inner(&self) -> UnboundedSender<Notification<K::Message>> {
+        let mut join_set = JoinSet::new();
+        let tx = self.init_inner_with_handle(&mut join_set);
+        join_set.detach_all();
+        tx
+    }
+
+    pub fn init_inner_with_handle(
+        &self,
+        join_set: &mut JoinSet<()>,
+    ) -> UnboundedSender<Notification<K::Message>> {
         let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Notification<K::Message>>();
         let in_ledger = self.ledger.clone();
 
-        tokio::spawn(
+        join_set.spawn(
             async move {
                 debug!(target: "state_machine", spawning = "TimeoutManager.notification_tx");
                 while let Some(Notification(msg)) = input_rx.recv().await {
@@ -294,7 +306,7 @@ where
         let timer_ledger = self.ledger.clone();
         let mut interval = tokio::time::interval(self.tick_rate);
         let signal_queue = self.signal_queue.clone();
-        tokio::spawn(
+        join_set.spawn(
             async move {
                 loop {
                     interval.tick().await;
@@ -336,8 +348,8 @@ where
     K::Message: TryInto<TimeoutInput<K>>,
     <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
 {
-    fn init(&self) -> UnboundedSender<Notification<K::Message>> {
-        self.init_inner()
+    fn init(&self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
+        self.init_inner_with_handle(join_set)
     }
 
     fn get_topics(&self) -> &[<K::Message as RexMessage>::Topic] {
@@ -350,15 +362,16 @@ where
 pub struct TimeoutTopic;
 
 #[cfg(test)]
-pub(crate) const TEST_TICK_RATE: Duration = Duration::from_millis(1);
+pub(crate) const TEST_TICK_RATE: Duration = Duration::from_millis(3);
 
 #[cfg(test)]
 pub(crate) const TEST_TIMEOUT: Duration = Duration::from_millis(11);
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
-    use crate::{test_support::*, TestDefault};
+    use crate::test_support::*;
 
     impl TestDefault for TimeoutManager<TestKind> {
         fn test_default() -> Self {
@@ -371,7 +384,9 @@ mod tests {
     async fn timeout_to_signal() {
         let timeout_manager = TimeoutManager::test_default();
 
-        let timeout_tx: UnboundedSender<Notification<TestMsg>> = timeout_manager.init();
+        let mut join_set = JoinSet::new();
+        let timeout_tx: UnboundedSender<Notification<TestMsg>> =
+            timeout_manager.init(&mut join_set);
 
         let test_id = StateId::new_rand(TestKind);
         let timeout_duration = Duration::from_millis(5);
@@ -402,7 +417,9 @@ mod tests {
     async fn timeout_cancellation() {
         let timeout_manager = TimeoutManager::test_default();
 
-        let timeout_tx: UnboundedSender<Notification<TestMsg>> = timeout_manager.init();
+        let mut join_set = JoinSet::new();
+        let timeout_tx: UnboundedSender<Notification<TestMsg>> =
+            timeout_manager.init(&mut join_set);
 
         let test_id = StateId::new_rand(TestKind);
         let set_timeout = UnaryRequest::set_timeout_millis(test_id, 10);
@@ -433,7 +450,9 @@ mod tests {
     async fn partial_timeout_cancellation() {
         let timeout_manager = TimeoutManager::test_default();
 
-        let timeout_tx: UnboundedSender<Notification<TestMsg>> = timeout_manager.init();
+        let mut join_set = JoinSet::new();
+        let timeout_tx: UnboundedSender<Notification<TestMsg>> =
+            timeout_manager.init(&mut join_set);
 
         let id1 = StateId::new_with_u128(TestKind, 1);
         let id2 = StateId::new_with_u128(TestKind, 2); // gets cancelled

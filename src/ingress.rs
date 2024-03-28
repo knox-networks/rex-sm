@@ -1,7 +1,10 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
-use bigerror::{IntoContext, Report};
-use tokio::sync::mpsc::{self, UnboundedSender};
+use bigerror::{ConversionError, IntoContext, LogError, Report};
+use tokio::{
+    sync::{mpsc, mpsc::UnboundedSender},
+    task::JoinSet,
+};
 use tracing::{debug, error, trace, warn, Instrument};
 
 use crate::{
@@ -10,7 +13,6 @@ use crate::{
     queue::StreamableDeque,
     Rex, StateId, StateMachineError,
 };
-use bigerror::{ConversionError, LogError};
 
 pub trait StateRouter<K>: Send + Sync
 where
@@ -96,13 +98,23 @@ where
         }
     }
 
+    pub fn init_packet_processor(&mut self) -> UnboundedSender<In> {
+        let mut join_set = JoinSet::new();
+        let tx = self.init_packet_processor_with_handle(&mut join_set);
+        join_set.detach_all();
+        tx
+    }
+
     // This needs to be a precursor step for now
     // TODO change to builder pattern
-    pub fn init_packet_processor(&mut self) -> UnboundedSender<In> {
+    pub fn init_packet_processor_with_handle(
+        &mut self,
+        join_set: &mut JoinSet<()>,
+    ) -> UnboundedSender<In> {
         let router = self.router.clone();
         let signal_queue = self.signal_queue.clone();
         let (packet_tx, mut packet_rx) = mpsc::unbounded_channel::<In>();
-        let _nw_handle = tokio::spawn(
+        let _nw_handle = join_set.spawn(
             async move {
                 debug!(target: "state_machine", spawning = "IngressAdapter.packet_tx");
                 while let Some(packet) = packet_rx.recv().await {
@@ -133,6 +145,16 @@ where
     }
 
     pub fn init_notification_processor(&self) -> UnboundedSender<Notification<K::Message>> {
+        let mut join_set = JoinSet::new();
+        let tx = self.init_notification_processor_with_handle(&mut join_set);
+        join_set.detach_all();
+        tx
+    }
+
+    pub fn init_notification_processor_with_handle(
+        &self,
+        join_set: &mut JoinSet<()>,
+    ) -> UnboundedSender<Notification<K::Message>> {
         debug!("starting IngressAdapter notification_tx");
         self.inbound_tx
             .as_ref()
@@ -141,7 +163,7 @@ where
         let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Notification<K::Message>>();
         let outbound_tx = self.outbound_tx.clone();
 
-        let _notification_handle = tokio::spawn(
+        let _notification_handle = join_set.spawn(
             async move {
                 debug!(target: "state_machine", spawning = "IngressAdapter.notification_tx");
                 while let Some(notification) = input_rx.recv().await {
@@ -171,8 +193,8 @@ where
     In: Send + Sync + fmt::Debug + 'static,
     Out: Send + Sync + fmt::Debug + 'static,
 {
-    fn init(&self) -> UnboundedSender<Notification<K::Message>> {
-        self.init_notification_processor()
+    fn init(&self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
+        self.init_notification_processor_with_handle(join_set)
     }
 
     fn get_topics(&self) -> &[<K::Message as RexMessage>::Topic] {
@@ -184,11 +206,11 @@ where
 mod tests {
     use std::time::Duration;
 
-    use tokio::sync::mpsc::UnboundedReceiver;
+    use tokio::{sync::mpsc::UnboundedReceiver, task::JoinSet};
     use tokio_stream::StreamExt;
 
     use super::*;
-    use crate::{notification::NotificationManager, test_support::*, StateId, TestDefault};
+    use crate::{notification::NotificationManager, test_support::*, StateId};
 
     type TestIngressAdapter = (
         IngressAdapter<TestKind, InPacket, OutPacket>,
@@ -215,10 +237,11 @@ mod tests {
     async fn route_to_network() {
         let (mut nw_adapter, mut network_rx) = TestIngressAdapter::test_default();
         let _inbound_tx = nw_adapter.init_packet_processor();
+        let mut join_set = JoinSet::new();
 
         let notification_manager: NotificationManager<TestMsg> =
-            NotificationManager::new(&[&nw_adapter]);
-        let notification_tx = notification_manager.init();
+            NotificationManager::new(&[&nw_adapter], &mut join_set);
+        let notification_tx = notification_manager.init(&mut join_set);
 
         let unknown_packet = OutPacket(b"unknown_packet".to_vec());
 
@@ -248,10 +271,11 @@ mod tests {
         tokio::pin!(signal_rx);
 
         let inboud_tx = nw_adapter.init_packet_processor();
+        let mut join_set = JoinSet::new();
 
         let notification_manager: NotificationManager<TestMsg> =
-            NotificationManager::new(&[&nw_adapter]);
-        let _notification_tx = notification_manager.init();
+            NotificationManager::new(&[&nw_adapter], &mut join_set);
+        let _notification_tx = notification_manager.init(&mut join_set);
 
         // An unknown packet should be unrouteable
         let unknown_packet = InPacket(b"unknown_packet".to_vec());

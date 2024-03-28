@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use futures::stream::Stream;
 use std::{
     collections::VecDeque,
     pin::Pin,
@@ -11,6 +10,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+use futures::stream::Stream;
 use parking_lot::Mutex;
 
 // Contains a waker for a given stream
@@ -70,6 +70,12 @@ pub struct StreamableDeque<T> {
     inner: Mutex<RawDeque<T>>,
 }
 
+impl<T> std::fmt::Debug for StreamableDeque<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamableDeque { ... }").finish()
+    }
+}
+
 impl<T> Default for StreamableDeque<T> {
     fn default() -> Self {
         Self {
@@ -108,8 +114,7 @@ impl<T> StreamableDeque<T> {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn pop_front(&self) -> Option<T> {
+    pub fn pop_front(&self) -> Option<T> {
         let mut inner = self.inner.lock();
         inner
             .front_values
@@ -183,8 +188,9 @@ impl<'a, T> Drop for StreamReceiver<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use futures::stream::StreamExt;
+
+    use super::*;
 
     #[tokio::test]
     async fn streamable_deque() {

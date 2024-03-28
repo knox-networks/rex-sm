@@ -1,14 +1,11 @@
-use std::{
-    collections::HashMap,
-    fmt::{self, Debug},
-    hash::Hash,
-    sync::Arc,
-};
-
-use tokio::sync::mpsc::{self, UnboundedSender};
-use tracing::{debug, trace, warn, Instrument};
+use std::{collections::HashMap, fmt, fmt::Debug, hash::Hash, sync::Arc};
 
 use bigerror::LogError;
+use tokio::{
+    sync::{mpsc, mpsc::UnboundedSender},
+    task::JoinSet,
+};
+use tracing::{debug, trace, warn, Instrument};
 
 use crate::{HashKind, Rex, StateId};
 
@@ -94,11 +91,11 @@ impl<M> NotificationManager<M>
 where
     M: RexMessage,
 {
-    pub fn new(processors: &[&dyn NotificationProcessor<M>]) -> Self {
+    pub fn new(processors: &[&dyn NotificationProcessor<M>], join_set: &mut JoinSet<()>) -> Self {
         let processors: HashMap<M::Topic, Vec<UnboundedSender<Notification<M>>>> = processors
             .iter()
             .fold(HashMap::new(), |mut subscribers, processor| {
-                let subscriber_tx = processor.init();
+                let subscriber_tx = processor.init(join_set);
                 for topic in processor.get_topics() {
                     subscribers
                         .entry(*topic)
@@ -112,10 +109,10 @@ where
         }
     }
 
-    pub fn init(&self) -> UnboundedSender<Notification<M>> {
+    pub fn init(&self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<M>> {
         let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Notification<M>>();
         let processors = self.processors.clone();
-        tokio::spawn(async move {
+        join_set.spawn(async move {
             debug!(spawning = "NotificationManager.processors");
             while let Some(notification) = input_rx.recv().await {
                 trace!(?notification);
@@ -145,7 +142,7 @@ pub trait NotificationProcessor<M>: Send + Sync
 where
     M: RexMessage,
 {
-    fn init(&self) -> UnboundedSender<Notification<M>>;
+    fn init(&self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<M>>;
     fn get_topics(&self) -> &[M::Topic];
 }
 
@@ -224,7 +221,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::{test_support::*, StateId, TestDefault};
+    use crate::{test_support::*, StateId};
 
     #[tokio::test]
     async fn route_to_timeout_manager() {
@@ -232,9 +229,10 @@ mod tests {
 
         let timeout_manager = TimeoutManager::test_default();
         let timeout_manager_two = TimeoutManager::test_default();
+        let mut join_set = JoinSet::new();
         let notification_manager: NotificationManager<TestMsg> =
-            NotificationManager::new(&[&timeout_manager, &timeout_manager_two]);
-        let notification_tx = notification_manager.init();
+            NotificationManager::new(&[&timeout_manager, &timeout_manager_two], &mut join_set);
+        let notification_tx = notification_manager.init(&mut join_set);
 
         let test_id = StateId::new_with_u128(TestKind, 1);
         // this should timeout instantly

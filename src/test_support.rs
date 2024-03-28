@@ -1,6 +1,7 @@
 use bigerror::{error_stack::Report, ConversionError, Reportable};
 use tokio::time::Instant;
 
+use super::{Kind, Rex, State};
 use crate::{
     ingress::StateRouter,
     notification::{GetTopic, RexMessage},
@@ -8,7 +9,9 @@ use crate::{
     StateId, StateMachineError,
 };
 
-use super::{Kind, Rex, State};
+pub trait TestDefault {
+    fn test_default() -> Self;
+}
 
 #[macro_export]
 macro_rules! node_state {
@@ -67,6 +70,7 @@ macro_rules! node_state {
 }
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+#[allow(dead_code)]
 pub enum TestTopic {
     Timeout,
     Ingress,
@@ -74,6 +78,7 @@ pub enum TestTopic {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum TestMsg {
     TimeoutInput(TimeoutInput<TestKind>),
     Ingress(OutPacket),
@@ -95,6 +100,7 @@ impl GetTopic<TestTopic> for TestMsg {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 pub enum TestState {
     New,
     Awaiting,
@@ -195,7 +201,7 @@ impl TryInto<OutPacket> for TestMsg {
         if let Self::Ingress(packet) = self {
             return Ok(packet);
         }
-        Err(ConversionError::attach_debug(self))
+        Err(ConversionError::attach_dbg(self))
     }
 }
 
@@ -206,7 +212,7 @@ impl TryInto<TimeoutInput<TestKind>> for TestMsg {
         if let Self::TimeoutInput(timeout) = self {
             return Ok(timeout);
         }
-        Err(ConversionError::attach_debug(self))
+        Err(ConversionError::attach_dbg(self))
     }
 }
 

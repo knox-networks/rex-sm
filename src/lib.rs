@@ -155,18 +155,13 @@ impl<K: Kind> StateId<K> {
     }
     // for testing purposes, easily distinguish UUIDs
     // by numerical value
-    #[cfg(any(feature = "test", test))]
+    #[cfg(test)]
     pub fn new_with_u128(kind: K, v: u128) -> Self {
         Self {
             kind,
             uuid: Uuid::from_u128(v),
         }
     }
-}
-
-#[cfg(any(feature = "test", test))]
-pub trait TestDefault {
-    fn test_default() -> Self;
 }
 
 #[derive(Debug, thiserror::Error)]
