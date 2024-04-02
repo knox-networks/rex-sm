@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use bigerror::{ConversionError, IntoContext, LogError, Report};
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::{
     sync::{mpsc, mpsc::UnboundedSender},
     task::JoinSet,
@@ -142,6 +143,42 @@ where
         self.inbound_tx = Some(packet_tx.clone());
 
         packet_tx
+    }
+
+    pub fn init_packet_processor_with_channel(
+        &mut self,
+        packet_tx: UnboundedSender<In>,
+        mut packet_rx: UnboundedReceiver<In>,
+    ) {
+        let mut join_set = JoinSet::new();
+        let router = self.router.clone();
+        let signal_queue = self.signal_queue.clone();
+        let _nw_handle = join_set.spawn(
+            async move {
+                debug!(target: "state_machine", spawning = "IngressAdapter.packet_tx");
+                while let Some(packet) = packet_rx.recv().await {
+                    trace!("receiving packet");
+                    let id = match router.get_id(&packet) {
+                        Err(e) => {
+                            error!(err = ?e, ?packet, "could not get id from router");
+                            continue;
+                        }
+                        Ok(None) => {
+                            warn!(?packet, "unable to route packet");
+                            continue;
+                        }
+                        Ok(Some(state_id)) => state_id,
+                    };
+                    K::Input::try_from(packet)
+                        .map(|input| {
+                            signal_queue.push_back(Signal { id, input });
+                        })
+                        .log_attached_err("ia::processors from packet failed");
+                }
+            }
+            .in_current_span(),
+        );
+        self.inbound_tx = Some(packet_tx);
     }
 
     pub fn init_notification_processor(&self) -> UnboundedSender<Notification<K::Message>> {
