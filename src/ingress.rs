@@ -179,6 +179,7 @@ where
             .in_current_span(),
         );
         self.inbound_tx = Some(packet_tx);
+        join_set.detach_all();
     }
 
     pub fn init_notification_processor(&self) -> UnboundedSender<Notification<K::Message>> {
