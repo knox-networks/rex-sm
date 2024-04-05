@@ -1,9 +1,11 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use bigerror::{ConversionError, IntoContext, LogError, Report};
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::{
-    sync::{mpsc, mpsc::UnboundedSender},
+    sync::{
+        mpsc,
+        mpsc::{UnboundedReceiver, UnboundedSender},
+    },
     task::JoinSet,
 };
 use tracing::{debug, error, trace, warn, Instrument};
@@ -114,32 +116,9 @@ where
     ) -> UnboundedSender<In> {
         let router = self.router.clone();
         let signal_queue = self.signal_queue.clone();
-        let (packet_tx, mut packet_rx) = mpsc::unbounded_channel::<In>();
-        let _nw_handle = join_set.spawn(
-            async move {
-                debug!(target: "state_machine", spawning = "IngressAdapter.packet_tx");
-                while let Some(packet) = packet_rx.recv().await {
-                    trace!("receiving packet");
-                    let id = match router.get_id(&packet) {
-                        Err(e) => {
-                            error!(err = ?e, ?packet, "could not get id from router");
-                            continue;
-                        }
-                        Ok(None) => {
-                            warn!(?packet, "unable to route packet");
-                            continue;
-                        }
-                        Ok(Some(state_id)) => state_id,
-                    };
-                    K::Input::try_from(packet)
-                        .map(|input| {
-                            signal_queue.push_back(Signal { id, input });
-                        })
-                        .log_attached_err("ia::processors from packet failed");
-                }
-            }
-            .in_current_span(),
-        );
+        let (packet_tx, packet_rx) = mpsc::unbounded_channel::<In>();
+        let _nw_handle = join_set
+            .spawn(Self::packet_processor(router, signal_queue, packet_rx).in_current_span());
         self.inbound_tx = Some(packet_tx.clone());
 
         packet_tx
@@ -148,36 +127,13 @@ where
     pub fn init_packet_processor_with_channel(
         &mut self,
         packet_tx: UnboundedSender<In>,
-        mut packet_rx: UnboundedReceiver<In>,
+        packet_rx: UnboundedReceiver<In>,
     ) {
         let mut join_set = JoinSet::new();
         let router = self.router.clone();
         let signal_queue = self.signal_queue.clone();
-        let _nw_handle = join_set.spawn(
-            async move {
-                debug!(target: "state_machine", spawning = "IngressAdapter.packet_tx");
-                while let Some(packet) = packet_rx.recv().await {
-                    trace!("receiving packet");
-                    let id = match router.get_id(&packet) {
-                        Err(e) => {
-                            error!(err = ?e, ?packet, "could not get id from router");
-                            continue;
-                        }
-                        Ok(None) => {
-                            warn!(?packet, "unable to route packet");
-                            continue;
-                        }
-                        Ok(Some(state_id)) => state_id,
-                    };
-                    K::Input::try_from(packet)
-                        .map(|input| {
-                            signal_queue.push_back(Signal { id, input });
-                        })
-                        .log_attached_err("ia::processors from packet failed");
-                }
-            }
-            .in_current_span(),
-        );
+        let _nw_handle = join_set
+            .spawn(Self::packet_processor(router, signal_queue, packet_rx).in_current_span());
         self.inbound_tx = Some(packet_tx);
         join_set.detach_all();
     }
@@ -187,6 +143,33 @@ where
         let tx = self.init_notification_processor_with_handle(&mut join_set);
         join_set.detach_all();
         tx
+    }
+
+    async fn packet_processor(
+        router: Arc<PacketRouter<K, In>>,
+        signal_queue: Arc<StreamableDeque<Signal<K>>>,
+        mut packet_rx: UnboundedReceiver<In>,
+    ) {
+        debug!(target: "state_machine", spawning = "IngressAdapter.packet_tx");
+        while let Some(packet) = packet_rx.recv().await {
+            trace!("receiving packet");
+            let id = match router.get_id(&packet) {
+                Err(e) => {
+                    error!(err = ?e, ?packet, "could not get id from router");
+                    continue;
+                }
+                Ok(None) => {
+                    warn!(?packet, "unable to route packet");
+                    continue;
+                }
+                Ok(Some(state_id)) => state_id,
+            };
+            K::Input::try_from(packet)
+                .map(|input| {
+                    signal_queue.push_back(Signal { id, input });
+                })
+                .log_attached_err("ia::processors from packet failed");
+        }
     }
 
     pub fn init_notification_processor_with_handle(
