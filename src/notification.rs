@@ -91,10 +91,13 @@ impl<M> NotificationManager<M>
 where
     M: RexMessage,
 {
-    pub fn new(processors: &[&dyn NotificationProcessor<M>], join_set: &mut JoinSet<()>) -> Self {
+    pub fn new(
+        processors: Vec<Box<dyn NotificationProcessor<M>>>,
+        join_set: &mut JoinSet<()>,
+    ) -> Self {
         let processors: HashMap<M::Topic, Vec<UnboundedSender<Notification<M>>>> = processors
-            .iter()
-            .fold(HashMap::new(), |mut subscribers, processor| {
+            .into_iter()
+            .fold(HashMap::new(), |mut subscribers, mut processor| {
                 let subscriber_tx = processor.init(join_set);
                 for topic in processor.get_topics() {
                     subscribers
@@ -142,7 +145,7 @@ pub trait NotificationProcessor<M>: Send + Sync
 where
     M: RexMessage,
 {
-    fn init(&self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<M>>;
+    fn init(&mut self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<M>>;
     fn get_topics(&self) -> &[M::Topic];
 }
 
@@ -228,10 +231,14 @@ mod tests {
         use crate::timeout::*;
 
         let timeout_manager = TimeoutManager::test_default();
+        let sq1 = timeout_manager.signal_queue.clone();
         let timeout_manager_two = TimeoutManager::test_default();
+        let sq2 = timeout_manager_two.signal_queue.clone();
         let mut join_set = JoinSet::new();
-        let notification_manager: NotificationManager<TestMsg> =
-            NotificationManager::new(&[&timeout_manager, &timeout_manager_two], &mut join_set);
+        let notification_manager: NotificationManager<TestMsg> = NotificationManager::new(
+            vec![Box::new(timeout_manager), Box::new(timeout_manager_two)],
+            &mut join_set,
+        );
         let notification_tx = notification_manager.init(&mut join_set);
 
         let test_id = StateId::new_with_u128(TestKind, 1);
@@ -243,14 +250,8 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(10)).await;
 
-        let timeout_one = timeout_manager
-            .signal_queue
-            .pop_front()
-            .expect("timeout one");
-        let timeout_two = timeout_manager_two
-            .signal_queue
-            .pop_front()
-            .expect("timeout two");
+        let timeout_one = sq1.pop_front().expect("timeout one");
+        let timeout_two = sq2.pop_front().expect("timeout two");
         assert_eq!(timeout_one.id, timeout_two.id);
     }
 }

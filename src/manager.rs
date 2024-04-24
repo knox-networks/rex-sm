@@ -249,13 +249,8 @@ where
                 .with_tick_rate(self.tick_rate.unwrap_or(timeout::DEFAULT_TICK_RATE));
             self.notification_processors.push(Box::new(timeout_manager));
         }
-        let processors: Vec<&dyn NotificationProcessor<K::Message>> = self
-            .notification_processors
-            .iter()
-            .map(|processor| processor.as_ref())
-            .collect();
 
-        let notification_manager = NotificationManager::new(processors.as_slice(), join_set);
+        let notification_manager = NotificationManager::new(self.notification_processors, join_set);
         let notification_queue: UnboundedSender<Notification<K::Message>> =
             notification_manager.init(join_set);
 

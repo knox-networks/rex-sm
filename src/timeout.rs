@@ -348,7 +348,7 @@ where
     K::Message: TryInto<TimeoutInput<K>>,
     <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
 {
-    fn init(&self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
+    fn init(&mut self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
         self.init_inner_with_handle(join_set)
     }
 
@@ -382,7 +382,7 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_to_signal() {
-        let timeout_manager = TimeoutManager::test_default();
+        let mut timeout_manager = TimeoutManager::test_default();
 
         let mut join_set = JoinSet::new();
         let timeout_tx: UnboundedSender<Notification<TestMsg>> =
@@ -415,7 +415,7 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_cancellation() {
-        let timeout_manager = TimeoutManager::test_default();
+        let mut timeout_manager = TimeoutManager::test_default();
 
         let mut join_set = JoinSet::new();
         let timeout_tx: UnboundedSender<Notification<TestMsg>> =
@@ -448,7 +448,7 @@ mod tests {
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn partial_timeout_cancellation() {
-        let timeout_manager = TimeoutManager::test_default();
+        let mut timeout_manager = TimeoutManager::test_default();
 
         let mut join_set = JoinSet::new();
         let timeout_tx: UnboundedSender<Notification<TestMsg>> =

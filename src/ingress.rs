@@ -214,7 +214,7 @@ where
     In: Send + Sync + fmt::Debug + 'static,
     Out: Send + Sync + fmt::Debug + 'static,
 {
-    fn init(&self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
+    fn init(&mut self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
         self.init_notification_processor_with_handle(join_set)
     }
 
@@ -261,7 +261,7 @@ mod tests {
         let mut join_set = JoinSet::new();
 
         let notification_manager: NotificationManager<TestMsg> =
-            NotificationManager::new(&[&nw_adapter], &mut join_set);
+            NotificationManager::new(vec![Box::new(nw_adapter)], &mut join_set);
         let notification_tx = notification_manager.init(&mut join_set);
 
         let unknown_packet = OutPacket(b"unknown_packet".to_vec());
@@ -295,7 +295,7 @@ mod tests {
         let mut join_set = JoinSet::new();
 
         let notification_manager: NotificationManager<TestMsg> =
-            NotificationManager::new(&[&nw_adapter], &mut join_set);
+            NotificationManager::new(vec![Box::new(nw_adapter)], &mut join_set);
         let _notification_tx = notification_manager.init(&mut join_set);
 
         // An unknown packet should be unrouteable
