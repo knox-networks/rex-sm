@@ -297,10 +297,17 @@ where
         signal_queue: Arc<SignalQueue<K>>,
         notification_queue: UnboundedSender<Notification<K::Message>>,
     ) -> Self {
+        let sm_count = state_machines.len();
         let state_machines: HashMap<K, BoxedStateMachine<K>> = state_machines
             .into_iter()
             .map(|sm| (sm.get_kind(), sm))
             .collect();
+        assert_eq!(
+            sm_count,
+            state_machines.len(),
+            "multiple state machines using the same kind, SMs: {sm_count}, Kinds: {}",
+            state_machines.len(),
+        );
         Self {
             signal_queue,
             notification_queue,
