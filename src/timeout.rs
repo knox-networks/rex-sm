@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use bigerror::attachment::DisplayDuration;
 use parking_lot::Mutex;
 use tokio::{
     sync::{mpsc, mpsc::UnboundedSender},
@@ -28,19 +29,6 @@ pub trait TimeoutMessage<K: Rex>: RexMessage + From<UnaryRequest<K, Self::Op>> {
 
 pub const DEFAULT_TICK_RATE: Duration = Duration::from_millis(5);
 const SHORT_TIMEOUT: Duration = Duration::from_secs(10);
-
-pub struct DisplayDuration(pub Duration);
-impl std::fmt::Display for DisplayDuration {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", hms_string(self.0))
-    }
-}
-
-impl From<Duration> for DisplayDuration {
-    fn from(duration: Duration) -> Self {
-        Self(duration)
-    }
-}
 
 /// convert a [`Duration`] into a "0H00m00s" string
 fn hms_string(duration: Duration) -> String {
@@ -348,7 +336,7 @@ where
     K::Message: TryInto<TimeoutInput<K>>,
     <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
 {
-    fn init(&self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
+    fn init(&mut self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
         self.init_inner_with_handle(join_set)
     }
 
@@ -382,7 +370,7 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_to_signal() {
-        let timeout_manager = TimeoutManager::test_default();
+        let mut timeout_manager = TimeoutManager::test_default();
 
         let mut join_set = JoinSet::new();
         let timeout_tx: UnboundedSender<Notification<TestMsg>> =
@@ -415,7 +403,7 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_cancellation() {
-        let timeout_manager = TimeoutManager::test_default();
+        let mut timeout_manager = TimeoutManager::test_default();
 
         let mut join_set = JoinSet::new();
         let timeout_tx: UnboundedSender<Notification<TestMsg>> =
@@ -448,7 +436,7 @@ mod tests {
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn partial_timeout_cancellation() {
-        let timeout_manager = TimeoutManager::test_default();
+        let mut timeout_manager = TimeoutManager::test_default();
 
         let mut join_set = JoinSet::new();
         let timeout_tx: UnboundedSender<Notification<TestMsg>> =

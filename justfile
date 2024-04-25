@@ -11,3 +11,9 @@ fmt:
 # Run clippy fix and rustfmt afterwards
 fix *args: && fmt
   cd {{invocation_directory()}}; cargo clippy --fix --all-targets --all-features {{args}}
+
+# run cargo clippy, denying warnings
+lint:
+    cd {{invocation_directory()}}; cargo clippy --all-targets --all-features -- -D warnings
+
+
