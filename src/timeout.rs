@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use bigerror::attachment::DisplayDuration;
 use parking_lot::Mutex;
 use tokio::{
     sync::{mpsc, mpsc::UnboundedSender},
@@ -28,19 +29,6 @@ pub trait TimeoutMessage<K: Rex>: RexMessage + From<UnaryRequest<K, Self::Op>> {
 
 pub const DEFAULT_TICK_RATE: Duration = Duration::from_millis(5);
 const SHORT_TIMEOUT: Duration = Duration::from_secs(10);
-
-pub struct DisplayDuration(pub Duration);
-impl std::fmt::Display for DisplayDuration {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", hms_string(self.0))
-    }
-}
-
-impl From<Duration> for DisplayDuration {
-    fn from(duration: Duration) -> Self {
-        Self(duration)
-    }
-}
 
 /// convert a [`Duration`] into a "0H00m00s" string
 fn hms_string(duration: Duration) -> String {
