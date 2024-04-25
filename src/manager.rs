@@ -778,7 +778,7 @@ mod tests {
                 PingInput::Packet(Packet { msg: 25.., .. }) => {
                     info!("PING Complete!");
                     self.complete(&ctx, id);
-                    self.cancel_timeout(&ctx, id).unwrap();
+                    self.cancel_timeout(&ctx, id);
                 }
 
                 PingInput::Packet(Packet {
@@ -787,8 +787,8 @@ mod tests {
                     who_sleeps,
                 }) => {
                     self.set_timeout(&ctx, id, TEST_TIMEOUT);
-                    self.set_timeout(&ctx, id, TEST_TIMEOUT)?;
-                    self.set_timeout(&ctx, id, TEST_TIMEOUT).unwrap();
+                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
+                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
                     msg += 5;
 
                     // sleep after resetting own timeout
@@ -797,7 +797,7 @@ mod tests {
                         // refresh timeout halfway through sleep
                         let half_sleep = Duration::from_millis(msg) / 2;
                         tokio::time::sleep(half_sleep).await;
-                        self.set_timeout(&ctx, id, TEST_TIMEOUT).unwrap();
+                        self.set_timeout(&ctx, id, TEST_TIMEOUT);
                         tokio::time::sleep(half_sleep).await;
                     }
 
@@ -852,7 +852,7 @@ mod tests {
                     msg += 5;
                     info!(?msg, "PONGING");
                     self.complete(&ctx, id);
-                    self.cancel_timeout(&ctx, id).unwrap();
+                    self.cancel_timeout(&ctx, id);
                     ctx.signal_queue.push_back(Signal {
                         id: sender,
                         input: Input::Ping(PingInput::Packet(Packet {
@@ -877,11 +877,11 @@ mod tests {
                         // refresh timeout halfway through sleep
                         let half_sleep = Duration::from_millis(msg) / 2;
                         tokio::time::sleep(half_sleep).await;
-                        self.set_timeout(&ctx, id, TEST_TIMEOUT).unwrap();
+                        self.set_timeout(&ctx, id, TEST_TIMEOUT);
                         tokio::time::sleep(half_sleep).await;
                     }
 
-                    self.set_timeout(&ctx, id, TEST_TIMEOUT).unwrap();
+                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
                     info!(?msg, "PONGING");
                     ctx.signal_queue.push_back(Signal {
                         id: sender,
