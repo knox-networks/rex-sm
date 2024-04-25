@@ -5,6 +5,7 @@ use tokio::time::Instant;
 use tracing::error;
 use uuid::Uuid;
 
+pub mod builder;
 pub mod ingress;
 pub mod manager;
 pub mod node;

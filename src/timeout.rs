@@ -363,7 +363,7 @@ mod tests {
 
     impl TestDefault for TimeoutManager<TestKind> {
         fn test_default() -> Self {
-            let signal_queue = Arc::new(SignalQueue::new());
+            let signal_queue = SignalQueue::default();
             TimeoutManager::new(signal_queue, TestTopic::Timeout).with_tick_rate(TEST_TICK_RATE)
         }
     }

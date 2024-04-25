@@ -47,3 +47,6 @@ constraints:
   NOTIFICATION_PROCESSOR:
     regex: '.*NotificationProcessor<.*'
 fix: '&mut self'
+---
+# id: signal-queue
+# sd 'Arc<SignalQueue<(.+)>>' 'SignalQueue<$1>'

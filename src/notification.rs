@@ -8,7 +8,10 @@ use tokio::{
 use tokio_stream::StreamExt;
 use tracing::{debug, trace, warn, Instrument};
 
-use crate::{queue::StreamableDeque, HashKind, Rex, StateId};
+use crate::{
+    queue::{StreamReceiver, StreamableDeque},
+    HashKind, Rex, StateId,
+};
 
 // a PubSub message that is able to be sent to [`NotificationProcessor`]s that subscribe to one
 // or more [`RexTopic`]s
@@ -89,7 +92,25 @@ where
     notification_queue: NotificationQueue<M>,
 }
 
-pub type NotificationQueue<M> = Arc<StreamableDeque<Notification<M>>>;
+#[derive(Default, Clone, Debug)]
+pub struct NotificationQueue<M: RexMessage>(pub(crate) Arc<StreamableDeque<Notification<M>>>);
+
+impl<M: RexMessage> NotificationQueue<M> {
+    pub fn new() -> Self {
+        Self(Arc::new(StreamableDeque::new()))
+    }
+    pub fn send(&self, notif: Notification<M>) {
+        self.0.push_back(notif)
+    }
+
+    pub fn send_priority(&self, notif: Notification<M>) {
+        self.0.push_back(notif)
+    }
+
+    pub fn stream(&self) -> StreamReceiver<Notification<M>> {
+        self.0.stream()
+    }
+}
 
 impl<M> NotificationManager<M>
 where
@@ -113,7 +134,7 @@ where
             });
         Self {
             processors: Arc::new(processors),
-            notification_queue: Default::default(),
+            notification_queue: NotificationQueue::new(),
         }
     }
 
@@ -252,7 +273,7 @@ mod tests {
         let timeout_duration = Duration::from_millis(1);
 
         let set_timeout = Notification(TimeoutInput::set_timeout(test_id, timeout_duration).into());
-        notification_tx.push_front(set_timeout);
+        notification_tx.send(set_timeout);
 
         tokio::time::sleep(Duration::from_millis(10)).await;
 

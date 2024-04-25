@@ -265,17 +265,13 @@ mod tests {
 
         // Any packet should get to the GatewayClient since routing rules
         // are only used at the ingress of the state machine
-        notification_tx
-            .send(Notification(unknown_packet.clone().into()))
-            .unwrap();
+        notification_tx.send(Notification(unknown_packet.clone().into()));
         tokio::time::sleep(Duration::from_millis(1)).await;
         assert_eq!(Ok(unknown_packet), network_rx.try_recv());
 
         let unsupported_packet = OutPacket(b"unsupported_packet".to_vec());
 
-        notification_tx
-            .send(Notification(unsupported_packet.clone().into()))
-            .unwrap();
+        notification_tx.send(Notification(unsupported_packet.clone().into()));
         tokio::time::sleep(Duration::from_millis(1)).await;
         assert_eq!(Ok(unsupported_packet), network_rx.try_recv());
     }
