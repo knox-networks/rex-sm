@@ -6,7 +6,7 @@ use crate::{
     ingress::StateRouter,
     notification::{GetTopic, RexMessage},
     timeout::TimeoutInput,
-    StateId, StateMachineError,
+    RexError, StateId,
 };
 
 pub trait TestDefault {
@@ -161,15 +161,10 @@ impl Rex for TestKind {
 pub struct TestStateRouter;
 impl StateRouter<TestKind> for TestStateRouter {
     type Inbound = InPacket;
-    fn get_id(
-        &self,
-        input: &Self::Inbound,
-    ) -> Result<Option<StateId<TestKind>>, Report<StateMachineError>> {
+    fn get_id(&self, input: &Self::Inbound) -> Result<Option<StateId<TestKind>>, Report<RexError>> {
         let packet = &input.0;
         match packet {
-            _ if packet.starts_with(b"unsupported") => {
-                Err(StateMachineError::attach("wrong packet type"))
-            }
+            _ if packet.starts_with(b"unsupported") => Err(RexError::attach("wrong packet type")),
             _ if packet.starts_with(b"unknown") => Ok(None),
             _ if packet.starts_with(b"new_state") => Ok(Some(StateId::new_with_u128(TestKind, 1))),
             _ => unimplemented!(),

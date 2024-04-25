@@ -211,7 +211,7 @@ where
     ledger: Arc<Mutex<TimeoutLedger<K>>>,
     topic: <K::Message as RexMessage>::Topic,
 
-    pub(crate) signal_queue: Arc<SignalQueue<K>>,
+    pub(crate) signal_queue: SignalQueue<K>,
 }
 
 impl<K> TimeoutManager<K>
@@ -221,7 +221,7 @@ where
     <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
 {
     pub fn new(
-        signal_queue: Arc<SignalQueue<K>>,
+        signal_queue: SignalQueue<K>,
         topic: impl Into<<K::Message as RexMessage>::Topic>,
     ) -> Self {
         Self {

@@ -14,7 +14,7 @@ use crate::{
     manager::{HashKind, Signal, SignalQueue},
     notification::{Notification, NotificationProcessor, RexMessage},
     queue::StreamableDeque,
-    Rex, StateId, StateMachineError,
+    Rex, RexError, StateId,
 };
 
 pub trait StateRouter<K>: Send + Sync
@@ -22,10 +22,7 @@ where
     K: HashKind,
 {
     type Inbound;
-    fn get_id(
-        &self,
-        input: &Self::Inbound,
-    ) -> Result<Option<StateId<K>>, Report<StateMachineError>>;
+    fn get_id(&self, input: &Self::Inbound) -> Result<Option<StateId<K>>, Report<RexError>>;
     fn get_kind(&self) -> K;
 }
 
@@ -40,7 +37,7 @@ impl<K, P> PacketRouter<K, P>
 where
     for<'a> K: HashKind + TryFrom<&'a P, Error = Report<ConversionError>>,
 {
-    fn get_id(&self, packet: &P) -> Result<Option<StateId<K>>, Report<StateMachineError>> {
+    fn get_id(&self, packet: &P) -> Result<Option<StateId<K>>, Report<RexError>> {
         let kind = K::try_from(packet);
         let kind = kind.map_err(|e| e.into_ctx())?;
         let Some(router) = self.0.get(&kind) else {
@@ -77,7 +74,7 @@ where
     Out: Send + Sync + fmt::Debug + 'static,
 {
     pub fn new(
-        signal_queue: Arc<SignalQueue<K>>,
+        signal_queue: SignalQueue<K>,
         outbound_tx: UnboundedSender<Out>,
         state_routers: Vec<BoxedStateRouter<K, In>>,
         topic: impl Into<<K::Message as RexMessage>::Topic>,
@@ -240,7 +237,7 @@ mod tests {
 
     impl TestDefault for TestIngressAdapter {
         fn test_default() -> Self {
-            let signal_queue = Arc::new(SignalQueue::new());
+            let signal_queue = SignalQueue::default();
             let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
 
             let nw_adapter = IngressAdapter::new(

@@ -60,11 +60,12 @@ use tracing::{debug, Instrument};
 
 use crate::{
     node::{Insert, Node, Update},
-    notification::{Notification, NotificationManager, NotificationProcessor, RexMessage},
+    notification::{
+        Notification, NotificationManager, NotificationProcessor, NotificationQueue, RexMessage,
+    },
     queue::StreamableDeque,
     storage::*,
-    timeout,
-    timeout::{TimeoutInput, TimeoutManager},
+    timeout::{self, TimeoutInput, TimeoutManager},
     Kind, Rex, State, StateId,
 };
 
@@ -107,7 +108,7 @@ where
     }
 }
 
-pub type SignalQueue<K> = StreamableDeque<Signal<K>>;
+pub type SignalQueue<K> = Arc<StreamableDeque<Signal<K>>>;
 
 /// [SignalExt] calls [`Signal::state_change`] to consume a [`Kind::State`] and emit
 /// a state change [`Signal`] with a valid [`StateMachine::Input`]
@@ -118,7 +119,7 @@ where
     fn signal_state_change(&self, id: StateId<K>, state: K::State);
 }
 
-impl<K> SignalExt<K> for SignalQueue<K>
+impl<K> SignalExt<K> for StreamableDeque<Signal<K>>
 where
     K: Rex,
 {
@@ -135,8 +136,8 @@ pub struct SmContext<K>
 where
     K: Rex,
 {
-    pub signal_queue: Arc<SignalQueue<K>>,
-    pub notification_queue: UnboundedSender<Notification<K::Message>>,
+    pub signal_queue: SignalQueue<K>,
+    pub notification_queue: NotificationQueue<K::Message>,
     pub state_store: Arc<StateStore<StateId<K>, K::State>>,
 }
 
@@ -145,7 +146,7 @@ where
     K: Rex,
 {
     pub fn notify(&self, notification: Notification<K::Message>) {
-        self.notification_queue.send(notification).log_err();
+        self.notification_queue.push_back(notification);
     }
 
     pub fn get_state(&self, id: StateId<K>) -> Option<K::State> {
@@ -173,8 +174,8 @@ pub struct StateMachineManager<K>
 where
     K: Rex,
 {
-    signal_queue: Arc<SignalQueue<K>>,
-    notification_queue: UnboundedSender<Notification<K::Message>>,
+    signal_queue: SignalQueue<K>,
+    notification_queue: NotificationQueue<K::Message>,
     state_machines: Arc<HashMap<K, BoxedStateMachine<K>>>,
     state_store: Arc<StateStore<StateId<K>, K::State>>,
 }
@@ -183,7 +184,7 @@ pub struct RexBuilder<K>
 where
     K: Rex,
 {
-    signal_queue: Arc<SignalQueue<K>>,
+    signal_queue: SignalQueue<K>,
     state_machines: Vec<BoxedStateMachine<K>>,
     notification_processors: Vec<Box<dyn NotificationProcessor<K::Message>>>,
     timeout_topic: Option<<K::Message as RexMessage>::Topic>,
@@ -198,7 +199,7 @@ where
     TimeoutManager<K>: NotificationProcessor<K::Message>,
 {
     #[must_use]
-    pub fn new(signal_queue: Arc<SignalQueue<K>>) -> Self {
+    pub fn new(signal_queue: SignalQueue<K>) -> Self {
         Self {
             signal_queue,
             state_machines: vec![],
@@ -251,8 +252,7 @@ where
         }
 
         let notification_manager = NotificationManager::new(self.notification_processors, join_set);
-        let notification_queue: UnboundedSender<Notification<K::Message>> =
-            notification_manager.init(join_set);
+        let notification_queue = notification_manager.init(join_set);
 
         let smm =
             StateMachineManager::new(self.state_machines, self.signal_queue, notification_queue);
@@ -289,8 +289,8 @@ where
     // const fn does not currently support Iterable
     pub fn new(
         state_machines: Vec<BoxedStateMachine<K>>,
-        signal_queue: Arc<SignalQueue<K>>,
-        notification_queue: UnboundedSender<Notification<K::Message>>,
+        signal_queue: SignalQueue<K>,
+        notification_queue: NotificationQueue<K::Message>,
     ) -> Self {
         let sm_count = state_machines.len();
         let state_machines: HashMap<K, BoxedStateMachine<K>> = state_machines
@@ -438,34 +438,20 @@ where
         ctx.notify(Notification(msg.into()));
     }
 
-    fn set_timeout(
-        &self,
-        ctx: &SmContext<K>,
-        id: StateId<K>,
-        duration: Duration,
-    ) -> Result<(), SendError<Notification<K::Message>>> {
+    fn set_timeout(&self, ctx: &SmContext<K>, id: StateId<K>, duration: Duration) {
         ctx.notification_queue
-            .send(Notification(TimeoutInput::set_timeout(id, duration).into()))
+            .push_front(Notification(TimeoutInput::set_timeout(id, duration).into()))
     }
 
-    fn set_timeout_millis(
-        &self,
-        ctx: &SmContext<K>,
-        id: StateId<K>,
-        millis: u64,
-    ) -> Result<(), SendError<Notification<K::Message>>> {
-        ctx.notification_queue.send(Notification(
+    fn set_timeout_millis(&self, ctx: &SmContext<K>, id: StateId<K>, millis: u64) {
+        ctx.notification_queue.push_front(Notification(
             TimeoutInput::set_timeout_millis(id, millis).into(),
         ))
     }
 
-    fn cancel_timeout(
-        &self,
-        ctx: &SmContext<K>,
-        id: StateId<K>,
-    ) -> Result<(), SendError<Notification<K::Message>>> {
+    fn cancel_timeout(&self, ctx: &SmContext<K>, id: StateId<K>) {
         ctx.notification_queue
-            .send(Notification(TimeoutInput::cancel_timeout(id).into()))
+            .push_front(Notification(TimeoutInput::cancel_timeout(id).into()))
     }
 
     fn get_parent_id(&self, ctx: &SmContext<K>, id: StateId<K>) -> Option<StateId<K>> {
@@ -732,7 +718,7 @@ mod tests {
                     // set all states to failed state
                     guard.update_all_fn(|mut z| {
                         z.node.state.fail();
-                        self.cancel_timeout(&ctx, z.node.id).unwrap(); // cancel all other timeouts
+                        self.cancel_timeout(&ctx, z.node.id); // cancel all other timeouts
                         z.finish_update()
                     });
 
@@ -800,6 +786,8 @@ mod tests {
                     sender,
                     who_sleeps,
                 }) => {
+                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
+                    self.set_timeout(&ctx, id, TEST_TIMEOUT)?;
                     self.set_timeout(&ctx, id, TEST_TIMEOUT).unwrap();
                     msg += 5;
 

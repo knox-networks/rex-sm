@@ -5,9 +5,10 @@ use tokio::{
     sync::{mpsc, mpsc::UnboundedSender},
     task::JoinSet,
 };
+use tokio_stream::StreamExt;
 use tracing::{debug, trace, warn, Instrument};
 
-use crate::{HashKind, Rex, StateId};
+use crate::{queue::StreamableDeque, HashKind, Rex, StateId};
 
 // a PubSub message that is able to be sent to [`NotificationProcessor`]s that subscribe to one
 // or more [`RexTopic`]s
@@ -85,7 +86,10 @@ where
     M: RexMessage,
 {
     processors: Arc<HashMap<M::Topic, Vec<Subscriber<M>>>>,
+    notification_queue: NotificationQueue<M>,
 }
+
+pub type NotificationQueue<M> = Arc<StreamableDeque<Notification<M>>>;
 
 impl<M> NotificationManager<M>
 where
@@ -109,15 +113,17 @@ where
             });
         Self {
             processors: Arc::new(processors),
+            notification_queue: Default::default(),
         }
     }
 
-    pub fn init(&self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<M>> {
-        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Notification<M>>();
+    pub fn init(&self, join_set: &mut JoinSet<()>) -> NotificationQueue<M> {
+        let stream_queue = self.notification_queue.clone();
         let processors = self.processors.clone();
         join_set.spawn(async move {
             debug!(spawning = "NotificationManager.processors");
-            while let Some(notification) = input_rx.recv().await {
+            let mut stream = stream_queue.stream();
+            while let Some(notification) = stream.next().await {
                 trace!(?notification);
                 let topic = notification.get_topic();
                 if let Some(subscribers) = processors.get(&topic) {
@@ -137,7 +143,7 @@ where
                 }
             }
         }.in_current_span());
-        input_tx
+        self.notification_queue.clone()
     }
 }
 
@@ -246,7 +252,7 @@ mod tests {
         let timeout_duration = Duration::from_millis(1);
 
         let set_timeout = Notification(TimeoutInput::set_timeout(test_id, timeout_duration).into());
-        notification_tx.send(set_timeout).unwrap();
+        notification_tx.push_front(set_timeout);
 
         tokio::time::sleep(Duration::from_millis(10)).await;
 

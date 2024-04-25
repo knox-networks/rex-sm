@@ -166,5 +166,5 @@ impl<K: Kind> StateId<K> {
 
 #[derive(Debug, thiserror::Error)]
 #[error("StateMachineError")]
-pub struct StateMachineError;
-reportable!(StateMachineError);
+pub struct RexError;
+reportable!(RexError);
