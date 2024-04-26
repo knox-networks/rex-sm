@@ -23,8 +23,8 @@ pub use manager::{
     StateMachineManager,
 };
 pub use notification::{
-    GetTopic, Notification, NotificationManager, NotificationProcessor, Operation, Request,
-    RequestInner, RexMessage, RexTopic, Subscriber, UnaryRequest,
+    GetTopic, Notification, NotificationManager, NotificationProcessor, NotificationQueue,
+    Operation, Request, RequestInner, RexMessage, RexTopic, Subscriber, UnaryRequest,
 };
 
 /// A trait for types representing state machine lifecycles. These types should be field-less
