@@ -51,21 +51,16 @@ use std::{collections::HashMap, fmt, hash::Hash, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use bigerror::{LogError, OptionReport};
 use parking_lot::FairMutex;
-use tokio::{
-    sync::mpsc::{error::SendError, UnboundedSender},
-    task::JoinSet,
-};
+use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{debug, Instrument};
 
 use crate::{
     node::{Insert, Node, Update},
-    notification::{
-        Notification, NotificationManager, NotificationProcessor, NotificationQueue, RexMessage,
-    },
+    notification::{Notification, NotificationQueue, RexMessage},
     queue::StreamableDeque,
     storage::*,
-    timeout::{self, TimeoutInput, TimeoutManager},
+    timeout::TimeoutInput,
     Kind, Rex, State, StateId,
 };
 
@@ -382,7 +377,7 @@ mod tests {
 
     use bigerror::{ConversionError, Report};
     use dashmap::DashMap;
-    use tokio::{sync::mpsc, time::Instant};
+    use tokio::time::Instant;
     use tracing::*;
 
     use super::*;

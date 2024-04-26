@@ -1,16 +1,13 @@
 use std::{collections::HashMap, fmt, fmt::Debug, hash::Hash, sync::Arc};
 
 use bigerror::LogError;
-use tokio::{
-    sync::{mpsc, mpsc::UnboundedSender},
-    task::JoinSet,
-};
+use tokio::{sync::mpsc::UnboundedSender, task::JoinSet};
 use tokio_stream::StreamExt;
 use tracing::{debug, trace, warn, Instrument};
 
 use crate::{
     queue::{StreamReceiver, StreamableDeque},
-    HashKind, Rex, SignalQueue, StateId,
+    HashKind, Rex, StateId,
 };
 
 // a PubSub message that is able to be sent to [`NotificationProcessor`]s that subscribe to one
