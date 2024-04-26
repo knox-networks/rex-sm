@@ -57,7 +57,7 @@ use tracing::{debug, Instrument};
 
 use crate::{
     node::{Insert, Node, Update},
-    notification::{Notification, NotificationQueue, RexMessage},
+    notification::{Notification, NotificationQueue},
     queue::StreamableDeque,
     storage::*,
     timeout::TimeoutInput,
@@ -386,7 +386,7 @@ mod tests {
         notification::GetTopic,
         storage::StateStore,
         timeout::{TimeoutTopic, TEST_TICK_RATE, TEST_TIMEOUT},
-        Rex, RexBuilder,
+        Rex, RexBuilder, RexMessage,
     };
 
     impl From<TimeoutInput<ComponentKind>> for GameMsg {

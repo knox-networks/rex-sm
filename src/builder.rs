@@ -79,6 +79,11 @@ where
         self
     }
 
+    pub fn with_outbound_tx(&mut self, tx: UnboundedSender<Out>) -> &mut Self {
+        self.outbound_tx = Some(tx);
+        self
+    }
+
     pub fn with_ingress_adapter<In>(
         &mut self,
         state_routers: Vec<BoxedStateRouter<K, In>>,
