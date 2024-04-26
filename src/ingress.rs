@@ -282,7 +282,7 @@ mod tests {
         let mut builder = RexBuilder::<TestKind, _>::new();
         let inbound_tx = builder
             .with_outbound_tx(outbound_tx)
-            .new_ingress_adapter(vec![Box::new(TestStateRouter)], TestTopic::Ingress);
+            .build_ingress_adapter(vec![Box::new(TestStateRouter)], TestTopic::Ingress);
         let ctx = builder.build();
         let signal_rx = ctx.signal_queue.stream().timeout(Duration::from_millis(2));
         tokio::pin!(signal_rx);

@@ -86,7 +86,7 @@ where
     }
 
     // this does not return `&mut Self` so that we can get access to an inbound_tx
-    pub fn new_ingress_adapter<In>(
+    pub fn build_ingress_adapter<In>(
         &mut self,
         state_routers: Vec<BoxedStateRouter<K, In>>,
         ingress_topic: <K::Message as RexMessage>::Topic,
