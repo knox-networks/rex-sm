@@ -26,7 +26,8 @@ where
     outbound_tx: Option<UnboundedSender<Out>>,
 }
 
-pub struct InitContext<K: Rex> {
+// context used before calling build
+pub struct BuilderContext<K: Rex> {
     pub signal_queue: SignalQueue<K>,
     pub notification_queue: NotificationQueue<K::Message>,
 }
@@ -39,8 +40,8 @@ where
     TimeoutManager<K>: NotificationProcessor<K::Message>,
     Out: Send + Sync + std::fmt::Debug + 'static,
 {
-    fn ctx(&self) -> InitContext<K> {
-        InitContext {
+    fn ctx(&self) -> BuilderContext<K> {
+        BuilderContext {
             signal_queue: self.signal_queue.clone(),
             notification_queue: self.notification_queue.clone(),
         }
@@ -65,7 +66,7 @@ where
 
     pub fn with_ctx_np<NP: NotificationProcessor<K::Message> + 'static>(
         &mut self,
-        op: impl FnOnce(InitContext<K>) -> NP,
+        op: impl FnOnce(BuilderContext<K>) -> NP,
     ) -> &mut Self {
         self.notification_processors.push(Box::new(op(self.ctx())));
         self
@@ -84,25 +85,29 @@ where
         self
     }
 
-    pub fn with_ingress_adapter<In>(
+    // this does not return `&mut Self` so that we can get access to an inbound_tx
+    pub fn new_ingress_adapter<In>(
         &mut self,
         state_routers: Vec<BoxedStateRouter<K, In>>,
         ingress_topic: <K::Message as RexMessage>::Topic,
-    ) -> &mut Self
+    ) -> UnboundedSender<In>
     where
         for<'a> K: TryFrom<&'a In, Error = Report<ConversionError>>,
         In: Send + Sync + std::fmt::Debug + 'static,
         K::Input: TryFrom<In, Error = Report<ConversionError>>,
         K::Message: TryInto<Out, Error = Report<ConversionError>>,
     {
+        assert!(!state_routers.is_empty());
         let outbound_tx = self
             .outbound_tx
             .clone()
-            .expect("RexBuilder: outbound_tx is uninitialized");
-        self.with_ctx_np(move |ctx| {
-            IngressAdapter::new(ctx.signal_queue, outbound_tx, state_routers, ingress_topic)
-        });
-        self
+            .expect("builder outbound_tx uninitialized");
+        let signal_queue = self.signal_queue.clone();
+        let ingress_adapter =
+            IngressAdapter::new(signal_queue, outbound_tx, state_routers, ingress_topic);
+        let inbound_tx = ingress_adapter.inbound_tx.clone();
+        self.with_np(ingress_adapter);
+        inbound_tx
     }
 
     pub fn with_timeout_manager(
@@ -137,14 +142,14 @@ where
             )
             .init(join_set);
         }
-        let smm = StateMachineManager::new(
+        let sm_manager = StateMachineManager::new(
             self.state_machines,
             self.signal_queue,
             self.notification_queue.clone(),
         );
 
-        smm.init(join_set);
-        smm.context()
+        sm_manager.init(join_set);
+        sm_manager.context()
     }
 
     pub fn build(self) -> SmContext<K> {

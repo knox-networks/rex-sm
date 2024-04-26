@@ -57,10 +57,9 @@ where
     outbound_tx: UnboundedSender<Out>,
     signal_queue: SignalQueue<K>,
     router: Arc<PacketRouter<K, In>>,
-    // Option<P> is used to guard against
-    // an invalid <IngressAdapter as NotificationProcessor>::init (one where
-    // IngressAdapter::init_packet_processor was not called)
-    inbound_tx: Option<UnboundedSender<In>>,
+    pub inbound_tx: UnboundedSender<In>,
+    // `self.inbound_rx.take()` will be used on intialization
+    inbound_rx: Option<UnboundedReceiver<In>>,
     topic: <K::Message as RexMessage>::Topic,
 }
 
@@ -88,61 +87,26 @@ where
                 );
             }
         }
+        let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<In>();
 
         Self {
             signal_queue,
             outbound_tx,
             router: Arc::new(PacketRouter(router_map)),
-            inbound_tx: None,
+            inbound_tx,
+            inbound_rx: Some(inbound_rx),
             topic: topic.into(),
         }
     }
 
-    pub fn init_packet_processor(&mut self) -> UnboundedSender<In> {
-        let mut join_set = JoinSet::new();
-        let tx = self.init_packet_processor_with_handle(&mut join_set);
-        join_set.detach_all();
-        tx
-    }
-
-    // This needs to be a precursor step for now
-    // TODO change to builder pattern
-    pub fn init_packet_processor_with_handle(
-        &mut self,
-        join_set: &mut JoinSet<()>,
-    ) -> UnboundedSender<In> {
+    pub(crate) fn spawn_inbound(&mut self, join_set: &mut JoinSet<()>) {
         let router = self.router.clone();
         let signal_queue = self.signal_queue.clone();
-        let (packet_tx, packet_rx) = mpsc::unbounded_channel::<In>();
-        let _nw_handle = join_set
-            .spawn(Self::packet_processor(router, signal_queue, packet_rx).in_current_span());
-        self.inbound_tx = Some(packet_tx.clone());
-
-        packet_tx
+        let inbound_rx = self.inbound_rx.take().expect("inbound_rx missing");
+        join_set.spawn(Self::process_inbound(router, signal_queue, inbound_rx).in_current_span());
     }
 
-    pub fn init_packet_processor_with_channel(
-        &mut self,
-        packet_tx: UnboundedSender<In>,
-        packet_rx: UnboundedReceiver<In>,
-    ) {
-        let mut join_set = JoinSet::new();
-        let router = self.router.clone();
-        let signal_queue = self.signal_queue.clone();
-        let _nw_handle = join_set
-            .spawn(Self::packet_processor(router, signal_queue, packet_rx).in_current_span());
-        self.inbound_tx = Some(packet_tx);
-        join_set.detach_all();
-    }
-
-    pub fn init_notification_processor(&self) -> UnboundedSender<Notification<K::Message>> {
-        let mut join_set = JoinSet::new();
-        let tx = self.init_notification_processor_with_handle(&mut join_set);
-        join_set.detach_all();
-        tx
-    }
-
-    async fn packet_processor(
+    async fn process_inbound(
         router: Arc<PacketRouter<K, In>>,
         signal_queue: Arc<StreamableDeque<Signal<K>>>,
         mut packet_rx: UnboundedReceiver<In>,
@@ -168,15 +132,22 @@ where
                 .log_attached_err("ia::processors from packet failed");
         }
     }
+}
 
-    pub fn init_notification_processor_with_handle(
-        &self,
-        join_set: &mut JoinSet<()>,
-    ) -> UnboundedSender<Notification<K::Message>> {
+impl<K, In, Out> NotificationProcessor<K::Message> for IngressAdapter<K, In, Out>
+where
+    K: Rex,
+    for<'a> K: TryFrom<&'a In, Error = Report<ConversionError>>,
+    K::Input: TryFrom<In, Error = Report<ConversionError>>,
+    K::Message: TryInto<Out, Error = Report<ConversionError>>,
+    In: Send + Sync + fmt::Debug + 'static,
+    Out: Send + Sync + fmt::Debug + 'static,
+{
+    fn init(&mut self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
+        debug!("calling IngressAdapter::process_inbound");
+        self.spawn_inbound(join_set);
+
         debug!("starting IngressAdapter notification_tx");
-        self.inbound_tx
-            .as_ref()
-            .expect("IngressAdapter did not initialize packet_tx!");
 
         let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Notification<K::Message>>();
         let outbound_tx = self.outbound_tx.clone();
@@ -200,20 +171,6 @@ where
 
         input_tx
     }
-}
-
-impl<K, In, Out> NotificationProcessor<K::Message> for IngressAdapter<K, In, Out>
-where
-    K: Rex,
-    for<'a> K: TryFrom<&'a In, Error = Report<ConversionError>>,
-    K::Input: TryFrom<In, Error = Report<ConversionError>>,
-    K::Message: TryInto<Out, Error = Report<ConversionError>>,
-    In: Send + Sync + fmt::Debug + 'static,
-    Out: Send + Sync + fmt::Debug + 'static,
-{
-    fn init(&mut self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
-        self.init_notification_processor_with_handle(join_set)
-    }
 
     fn get_topics(&self) -> &[<K::Message as RexMessage>::Topic] {
         std::slice::from_ref(&self.topic)
@@ -231,7 +188,7 @@ mod tests {
     use crate::{
         notification::{NotificationManager, NotificationQueue},
         test_support::*,
-        StateId,
+        RexBuilder, StateId,
     };
 
     type TestIngressAdapter = (
@@ -244,25 +201,24 @@ mod tests {
             let signal_queue = SignalQueue::default();
             let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
 
-            let nw_adapter = IngressAdapter::new(
+            let adapter = IngressAdapter::new(
                 signal_queue,
                 outbound_tx,
                 vec![Box::new(TestStateRouter)],
                 TestTopic::Ingress,
             );
-            (nw_adapter, outbound_rx)
+            (adapter, outbound_rx)
         }
     }
 
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn route_to_network() {
-        let (mut nw_adapter, mut network_rx) = TestIngressAdapter::test_default();
-        let _inbound_tx = nw_adapter.init_packet_processor();
+        let (adapter, mut network_rx) = TestIngressAdapter::test_default();
         let mut join_set = JoinSet::new();
 
         let notification_manager: NotificationManager<TestMsg> = NotificationManager::new(
-            vec![Box::new(nw_adapter)],
+            vec![Box::new(adapter)],
             &mut join_set,
             NotificationQueue::new(),
         );
@@ -286,16 +242,16 @@ mod tests {
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn route_from_network() {
-        let (mut nw_adapter, _outbound_rx) = TestIngressAdapter::test_default();
-        let signal_queue = nw_adapter.signal_queue.clone();
+        let (adapter, _outbound_rx) = TestIngressAdapter::test_default();
+        let signal_queue = adapter.signal_queue.clone();
         let signal_rx = signal_queue.stream().timeout(Duration::from_millis(2));
         tokio::pin!(signal_rx);
 
-        let inboud_tx = nw_adapter.init_packet_processor();
+        let inboud_tx = adapter.inbound_tx.clone();
         let mut join_set = JoinSet::new();
 
         let notification_manager: NotificationManager<TestMsg> = NotificationManager::new(
-            vec![Box::new(nw_adapter)],
+            vec![Box::new(adapter)],
             &mut join_set,
             NotificationQueue::new(),
         );
@@ -308,6 +264,36 @@ mod tests {
 
         let supported_packet = InPacket(b"new_state".to_vec());
         inboud_tx.send(supported_packet.clone()).unwrap();
+        let signal = signal_rx.next().await.unwrap().unwrap();
+        assert_eq!(
+            Signal {
+                id: StateId::new_with_u128(TestKind, 1),
+                input: TestInput::Packet(supported_packet),
+            },
+            signal,
+        );
+    }
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn rex_builder() {
+        // TODO test outbound_rx
+        let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel::<OutPacket>();
+
+        let mut builder = RexBuilder::<TestKind, _>::new();
+        let inbound_tx = builder
+            .with_outbound_tx(outbound_tx)
+            .new_ingress_adapter(vec![Box::new(TestStateRouter)], TestTopic::Ingress);
+        let ctx = builder.build();
+        let signal_rx = ctx.signal_queue.stream().timeout(Duration::from_millis(2));
+        tokio::pin!(signal_rx);
+
+        // An unknown packet should be unrouteable
+        let unknown_packet = InPacket(b"unknown_packet".to_vec());
+        inbound_tx.send(unknown_packet).unwrap();
+        signal_rx.next().await.unwrap().unwrap_err();
+
+        let supported_packet = InPacket(b"new_state".to_vec());
+        inbound_tx.send(supported_packet.clone()).unwrap();
         let signal = signal_rx.next().await.unwrap().unwrap();
         assert_eq!(
             Signal {
