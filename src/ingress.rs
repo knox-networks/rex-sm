@@ -55,7 +55,7 @@ where
     Out: Send + Sync + fmt::Debug,
 {
     outbound_tx: UnboundedSender<Out>,
-    signal_queue: Arc<StreamableDeque<Signal<K>>>,
+    signal_queue: SignalQueue<K>,
     router: Arc<PacketRouter<K, In>>,
     // Option<P> is used to guard against
     // an invalid <IngressAdapter as NotificationProcessor>::init (one where
@@ -228,7 +228,11 @@ mod tests {
     use tokio_stream::StreamExt;
 
     use super::*;
-    use crate::{notification::NotificationManager, test_support::*, StateId};
+    use crate::{
+        notification::{NotificationManager, NotificationQueue},
+        test_support::*,
+        StateId,
+    };
 
     type TestIngressAdapter = (
         IngressAdapter<TestKind, InPacket, OutPacket>,
@@ -257,8 +261,11 @@ mod tests {
         let _inbound_tx = nw_adapter.init_packet_processor();
         let mut join_set = JoinSet::new();
 
-        let notification_manager: NotificationManager<TestMsg> =
-            NotificationManager::new(vec![Box::new(nw_adapter)], &mut join_set);
+        let notification_manager: NotificationManager<TestMsg> = NotificationManager::new(
+            vec![Box::new(nw_adapter)],
+            &mut join_set,
+            NotificationQueue::new(),
+        );
         let notification_tx = notification_manager.init(&mut join_set);
 
         let unknown_packet = OutPacket(b"unknown_packet".to_vec());
@@ -287,8 +294,11 @@ mod tests {
         let inboud_tx = nw_adapter.init_packet_processor();
         let mut join_set = JoinSet::new();
 
-        let notification_manager: NotificationManager<TestMsg> =
-            NotificationManager::new(vec![Box::new(nw_adapter)], &mut join_set);
+        let notification_manager: NotificationManager<TestMsg> = NotificationManager::new(
+            vec![Box::new(nw_adapter)],
+            &mut join_set,
+            NotificationQueue::new(),
+        );
         let _notification_tx = notification_manager.init(&mut join_set);
 
         // An unknown packet should be unrouteable

@@ -10,7 +10,7 @@ use tracing::{debug, trace, warn, Instrument};
 
 use crate::{
     queue::{StreamReceiver, StreamableDeque},
-    HashKind, Rex, StateId,
+    HashKind, Rex, SignalQueue, StateId,
 };
 
 // a PubSub message that is able to be sent to [`NotificationProcessor`]s that subscribe to one
@@ -103,8 +103,8 @@ impl<M: RexMessage> NotificationQueue<M> {
         self.0.push_back(notif)
     }
 
-    pub fn send_priority(&self, notif: Notification<M>) {
-        self.0.push_back(notif)
+    pub fn priority_send(&self, notif: Notification<M>) {
+        self.0.push_front(notif)
     }
 
     pub fn stream(&self) -> StreamReceiver<Notification<M>> {
@@ -119,6 +119,7 @@ where
     pub fn new(
         processors: Vec<Box<dyn NotificationProcessor<M>>>,
         join_set: &mut JoinSet<()>,
+        notification_queue: NotificationQueue<M>,
     ) -> Self {
         let processors: HashMap<M::Topic, Vec<UnboundedSender<Notification<M>>>> = processors
             .into_iter()
@@ -134,7 +135,7 @@ where
             });
         Self {
             processors: Arc::new(processors),
-            notification_queue: NotificationQueue::new(),
+            notification_queue,
         }
     }
 
@@ -262,9 +263,10 @@ mod tests {
         let timeout_manager_two = TimeoutManager::test_default();
         let sq2 = timeout_manager_two.signal_queue.clone();
         let mut join_set = JoinSet::new();
-        let notification_manager: NotificationManager<TestMsg> = NotificationManager::new(
+        let notification_manager = NotificationManager::new(
             vec![Box::new(timeout_manager), Box::new(timeout_manager_two)],
             &mut join_set,
+            NotificationQueue::new(),
         );
         let notification_tx = notification_manager.init(&mut join_set);
 

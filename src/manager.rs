@@ -241,7 +241,7 @@ where
     }
 }
 
-type BoxedStateMachine<K> = Box<dyn StateMachine<K>>;
+pub(crate) type BoxedStateMachine<K> = Box<dyn StateMachine<K>>;
 
 /// Represents the trait that a state machine must fulfill to process signals
 /// A [`StateMachine`] consumes the `input` portion of a [`Signal`] and...
@@ -346,18 +346,18 @@ where
 
     fn set_timeout(&self, ctx: &SmContext<K>, id: StateId<K>, duration: Duration) {
         ctx.notification_queue
-            .send_priority(Notification(TimeoutInput::set_timeout(id, duration).into()))
+            .priority_send(Notification(TimeoutInput::set_timeout(id, duration).into()))
     }
 
     fn set_timeout_millis(&self, ctx: &SmContext<K>, id: StateId<K>, millis: u64) {
-        ctx.notification_queue.send_priority(Notification(
+        ctx.notification_queue.priority_send(Notification(
             TimeoutInput::set_timeout_millis(id, millis).into(),
         ))
     }
 
     fn cancel_timeout(&self, ctx: &SmContext<K>, id: StateId<K>) {
         ctx.notification_queue
-            .send_priority(Notification(TimeoutInput::cancel_timeout(id).into()))
+            .priority_send(Notification(TimeoutInput::cancel_timeout(id).into()))
     }
 
     fn get_parent_id(&self, ctx: &SmContext<K>, id: StateId<K>) -> Option<StateId<K>> {
@@ -391,7 +391,7 @@ mod tests {
         notification::GetTopic,
         storage::StateStore,
         timeout::{TimeoutTopic, TEST_TICK_RATE, TEST_TIMEOUT},
-        Rex,
+        Rex, RexBuilder,
     };
 
     impl From<TimeoutInput<ComponentKind>> for GameMsg {
@@ -812,29 +812,21 @@ mod tests {
     #[tracing_test::traced_test]
     async fn state_machine() {
         // This test does not initialize the NotificationManager
-        let (notification_tx, _notification_rx) = mpsc::unbounded_channel();
-        let mut join_set = JoinSet::new();
-
-        let signal_queue = Arc::new(StreamableDeque::new());
-        let manager = StateMachineManager::new(
-            vec![
-                Box::new(MenuStateMachine::new()),
-                Box::new(PingStateMachine),
-                Box::new(PongStateMachine),
-            ],
-            signal_queue,
-            notification_tx,
-        );
-        manager.init(&mut join_set);
+        let mut builder = RexBuilder::<_, ()>::new();
+        builder
+            .with_sm(MenuStateMachine::new())
+            .with_sm(PingStateMachine)
+            .with_sm(PongStateMachine);
+        let ctx = builder.build();
 
         let menu_id = StateId::new_rand(ComponentKind::Menu);
-        manager.signal_queue.push_back(Signal {
+        ctx.signal_queue.push_back(Signal {
             id: menu_id,
             input: Input::Menu(MenuInput::Play(WhoSleeps(None))),
         });
         tokio::time::sleep(Duration::from_millis(1)).await;
 
-        let tree = manager.state_store.get_tree(menu_id).unwrap();
+        let tree = ctx.state_store.get_tree(menu_id).unwrap();
         let node = tree.lock();
         let ping_id = node.children[0].id;
         let pong_id = node.children[1].id;
@@ -850,14 +842,14 @@ mod tests {
         // !!NOTE!! ============================================================
 
         // ensure MenuState is also indexed by ping id
-        let tree = manager.state_store.get_tree(ping_id).unwrap();
+        let tree = ctx.state_store.get_tree(ping_id).unwrap();
         let node = tree.lock();
         let state = node.get_state(ping_id).unwrap();
         assert_eq!(ComponentState::Ping(PingState::Done), *state);
 
         drop(node);
 
-        let tree = manager.state_store.get_tree(pong_id).unwrap();
+        let tree = ctx.state_store.get_tree(pong_id).unwrap();
         let node = tree.lock();
         let state = node.get_state(pong_id).unwrap();
         assert_eq!(ComponentState::Pong(PongState::Done), *state);
@@ -866,20 +858,19 @@ mod tests {
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn state_machine_timeout() {
-        let signal_queue = Arc::new(StreamableDeque::new());
-
         let menu_sm = MenuStateMachine::new();
         let menu_failures = menu_sm.failures.clone();
-        let ctx = RexBuilder::new(signal_queue.clone())
+        let mut builder = RexBuilder::<_, ()>::new();
+        builder
             .with_sm(menu_sm)
             .with_sm(PingStateMachine)
             .with_sm(PongStateMachine)
             .with_timeout_manager(TimeoutTopic)
-            .with_tick_rate(TEST_TICK_RATE / 2)
-            .build_and_init();
+            .with_tick_rate(TEST_TICK_RATE / 2);
+        let ctx = builder.build();
 
         let menu_id = StateId::new_rand(ComponentKind::Menu);
-        signal_queue.push_back(Signal {
+        ctx.signal_queue.push_back(Signal {
             id: menu_id,
             input: Input::Menu(MenuInput::Play(WhoSleeps(Some(ComponentKind::Ping)))),
         });
@@ -911,7 +902,7 @@ mod tests {
 
         // Now fail due to Ping
         let menu_id = StateId::new_rand(ComponentKind::Menu);
-        signal_queue.push_back(Signal {
+        ctx.signal_queue.push_back(Signal {
             id: menu_id,
             input: Input::Menu(MenuInput::Play(WhoSleeps(Some(ComponentKind::Pong)))),
         });

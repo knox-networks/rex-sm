@@ -17,8 +17,9 @@ pub mod timeout;
 #[cfg(test)]
 mod test_support;
 
+pub use builder::RexBuilder;
 pub use manager::{
-    HashKind, RexBuilder, Signal, SignalExt, SignalQueue, SmContext, StateMachine, StateMachineExt,
+    HashKind, Signal, SignalExt, SignalQueue, SmContext, StateMachine, StateMachineExt,
     StateMachineManager,
 };
 pub use notification::{
