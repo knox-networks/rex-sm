@@ -124,7 +124,7 @@ where
     fn build_inner(mut self, join_set: &mut JoinSet<()>) -> SmContext<K> {
         self.build_timeout_manager();
 
-        if self.notification_processors.is_empty() {
+        if !self.notification_processors.is_empty() {
             NotificationManager::new(
                 self.notification_processors,
                 join_set,
