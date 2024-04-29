@@ -59,49 +59,53 @@ where
         }
     }
 
-    pub fn with_sm<SM: StateMachine<K> + 'static>(&mut self, state_machine: SM) -> &mut Self {
+    #[must_use]
+    pub fn with_sm<SM: StateMachine<K> + 'static>(mut self, state_machine: SM) -> Self {
         self.state_machines.push(Box::new(state_machine));
         self
     }
 
+    #[must_use]
     pub fn with_np<NP: NotificationProcessor<K::Message> + 'static>(
-        &mut self,
+        mut self,
         processor: NP,
-    ) -> &mut Self {
+    ) -> Self {
         self.notification_processors.push(Box::new(processor));
         self
     }
 
+    #[must_use]
     pub fn with_ctx_np<NP: NotificationProcessor<K::Message> + 'static>(
-        &mut self,
+        mut self,
         op: impl FnOnce(BuilderContext<K>) -> NP,
-    ) -> &mut Self {
+    ) -> Self {
         self.notification_processors.push(Box::new(op(self.ctx())));
         self
     }
 
-    pub fn with_boxed_np(
-        &mut self,
-        processor: Box<dyn NotificationProcessor<K::Message>>,
-    ) -> &mut Self {
+    #[must_use]
+    pub fn with_boxed_np(mut self, processor: Box<dyn NotificationProcessor<K::Message>>) -> Self {
         self.notification_processors.push(processor);
         self
     }
 
-    pub fn with_outbound_tx(&mut self, tx: UnboundedSender<Out>) -> &mut Self {
+    #[must_use]
+    pub fn with_outbound_tx(mut self, tx: UnboundedSender<Out>) -> Self {
         self.outbound_tx = Some(tx);
         self
     }
 
+    #[must_use]
     pub fn with_timeout_manager(
-        &mut self,
+        mut self,
         timeout_topic: <K::Message as RexMessage>::Topic,
-    ) -> &mut Self {
+    ) -> Self {
         self.timeout_topic = Some(timeout_topic);
         self
     }
 
-    pub fn with_tick_rate(&mut self, tick_rate: Duration) -> &mut Self {
+    #[must_use]
+    pub fn with_tick_rate(mut self, tick_rate: Duration) -> Self {
         self.tick_rate = Some(tick_rate);
         self
     }
@@ -147,7 +151,8 @@ where
         self.build_inner(join_set)
     }
 
-    // this does not return `&mut Self` so that we can get access to an inbound_tx
+    // this does not return `Self` so that we can get access to an inbound_tx
+    #[must_use]
     pub fn into_ingress_builder<In2, Out2>(
         self,
         outbound_tx: UnboundedSender<Out2>,
@@ -190,6 +195,7 @@ where
     <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
     TimeoutManager<K>: NotificationProcessor<K::Message>,
 {
+    #[must_use]
     pub fn new_connected(
         outbound_tx: UnboundedSender<Out>,
     ) -> (UnboundedSender<In>, RexBuilder<K, In, Out>) {
@@ -203,11 +209,12 @@ where
             },
         )
     }
+    #[must_use]
     pub fn with_ingress_adapter(
-        &mut self,
+        mut self,
         state_routers: Vec<BoxedStateRouter<K, In>>,
         ingress_topic: <K::Message as RexMessage>::Topic,
-    ) -> &mut Self {
+    ) -> Self {
         assert!(!state_routers.is_empty());
         let (tx, rx) = self
             .ingress_channel
@@ -226,8 +233,7 @@ where
             inbound_rx: Some(rx),
             topic: ingress_topic.into(),
         };
-        self.with_np(ingress_adapter);
-        self
+        self.with_np(ingress_adapter)
     }
 }
 

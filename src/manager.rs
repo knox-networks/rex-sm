@@ -807,12 +807,11 @@ mod tests {
     #[tracing_test::traced_test]
     async fn state_machine() {
         // This test does not initialize the NotificationManager
-        let mut builder = RexBuilder::new();
-        builder
+        let ctx = RexBuilder::new()
             .with_sm(MenuStateMachine::new())
             .with_sm(PingStateMachine)
-            .with_sm(PongStateMachine);
-        let ctx = builder.build();
+            .with_sm(PongStateMachine)
+            .build();
 
         let menu_id = StateId::new_rand(ComponentKind::Menu);
         ctx.signal_queue.push_back(Signal {
@@ -855,14 +854,13 @@ mod tests {
     async fn state_machine_timeout() {
         let menu_sm = MenuStateMachine::new();
         let menu_failures = menu_sm.failures.clone();
-        let mut builder = RexBuilder::new();
-        builder
+        let ctx = RexBuilder::new()
             .with_sm(menu_sm)
             .with_sm(PingStateMachine)
             .with_sm(PongStateMachine)
             .with_timeout_manager(TimeoutTopic)
-            .with_tick_rate(TEST_TICK_RATE / 2);
-        let ctx = builder.build();
+            .with_tick_rate(TEST_TICK_RATE / 2)
+            .build();
 
         let menu_id = StateId::new_rand(ComponentKind::Menu);
         ctx.signal_queue.push_back(Signal {

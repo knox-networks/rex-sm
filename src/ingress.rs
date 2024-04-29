@@ -290,10 +290,11 @@ mod tests {
         // TODO test outbound_rx
         let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel::<OutPacket>();
 
-        let (inbound_tx, mut builder) = RexBuilder::new_connected(outbound_tx);
-        builder.with_ingress_adapter(vec![Box::new(TestStateRouter)], TestTopic::Ingress);
+        let (inbound_tx, builder) = RexBuilder::new_connected(outbound_tx);
+        let ctx = builder
+            .with_ingress_adapter(vec![Box::new(TestStateRouter)], TestTopic::Ingress)
+            .build();
 
-        let ctx = builder.build();
         let signal_rx = ctx.signal_queue.stream().timeout(Duration::from_millis(2));
         tokio::pin!(signal_rx);
 
