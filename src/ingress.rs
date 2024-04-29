@@ -29,15 +29,34 @@ where
 pub type BoxedStateRouter<K, In> = Box<dyn StateRouter<K, Inbound = In>>;
 
 /// top level router that holds all [`Kind`] indexed [`StateRouter`]s
-pub struct PacketRouter<K, In>(HashMap<K, BoxedStateRouter<K, In>>)
+pub struct PacketRouter<K, In>(Arc<HashMap<K, BoxedStateRouter<K, In>>>)
 where
     K: HashKind;
 
-impl<K, P> PacketRouter<K, P>
+impl<K: HashKind, In> Clone for PacketRouter<K, In> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<K, In> PacketRouter<K, In>
 where
-    for<'a> K: HashKind + TryFrom<&'a P, Error = Report<ConversionError>>,
+    for<'a> K: HashKind + TryFrom<&'a In, Error = Report<ConversionError>>,
 {
-    fn get_id(&self, packet: &P) -> Result<Option<StateId<K>>, Report<RexError>> {
+    pub fn new(state_routers: Vec<BoxedStateRouter<K, In>>) -> Self {
+        let mut router_map: HashMap<K, BoxedStateRouter<K, In>> = HashMap::new();
+        for router in state_routers {
+            if let Some(old_router) = router_map.insert(router.get_kind(), router) {
+                panic!(
+                    "Found multiple routers for kind: {:?}",
+                    old_router.get_kind()
+                );
+            }
+        }
+        Self(Arc::new(router_map))
+    }
+
+    fn get_id(&self, packet: &In) -> Result<Option<StateId<K>>, Report<RexError>> {
         let kind = K::try_from(packet);
         let kind = kind.map_err(|e| e.into_ctx())?;
         let Some(router) = self.0.get(&kind) else {
@@ -54,13 +73,13 @@ where
     In: Send + Sync + fmt::Debug,
     Out: Send + Sync + fmt::Debug,
 {
-    outbound_tx: UnboundedSender<Out>,
-    signal_queue: SignalQueue<K>,
-    router: Arc<PacketRouter<K, In>>,
+    pub(crate) outbound_tx: UnboundedSender<Out>,
+    pub(crate) signal_queue: SignalQueue<K>,
+    pub(crate) router: PacketRouter<K, In>,
     pub inbound_tx: UnboundedSender<In>,
     // `self.inbound_rx.take()` will be used on intialization
-    inbound_rx: Option<UnboundedReceiver<In>>,
-    topic: <K::Message as RexMessage>::Topic,
+    pub(crate) inbound_rx: Option<UnboundedReceiver<In>>,
+    pub(crate) topic: <K::Message as RexMessage>::Topic,
 }
 
 impl<K, In, Out> IngressAdapter<K, In, Out>
@@ -72,27 +91,19 @@ where
     In: Send + Sync + fmt::Debug + 'static,
     Out: Send + Sync + fmt::Debug + 'static,
 {
+    #[must_use]
     pub fn new(
         signal_queue: SignalQueue<K>,
         outbound_tx: UnboundedSender<Out>,
         state_routers: Vec<BoxedStateRouter<K, In>>,
         topic: impl Into<<K::Message as RexMessage>::Topic>,
     ) -> Self {
-        let mut router_map: HashMap<K, BoxedStateRouter<K, In>> = HashMap::new();
-        for router in state_routers {
-            if let Some(old_router) = router_map.insert(router.get_kind(), router) {
-                panic!(
-                    "Found multiple routers for kind: {:?}",
-                    old_router.get_kind()
-                );
-            }
-        }
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<In>();
 
         Self {
             signal_queue,
             outbound_tx,
-            router: Arc::new(PacketRouter(router_map)),
+            router: PacketRouter::new(state_routers),
             inbound_tx,
             inbound_rx: Some(inbound_rx),
             topic: topic.into(),
@@ -107,7 +118,7 @@ where
     }
 
     async fn process_inbound(
-        router: Arc<PacketRouter<K, In>>,
+        router: PacketRouter<K, In>,
         signal_queue: Arc<StreamableDeque<Signal<K>>>,
         mut packet_rx: UnboundedReceiver<In>,
     ) {
@@ -279,10 +290,9 @@ mod tests {
         // TODO test outbound_rx
         let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel::<OutPacket>();
 
-        let mut builder = RexBuilder::<TestKind, _>::new();
-        let inbound_tx = builder
-            .with_outbound_tx(outbound_tx)
-            .build_ingress_adapter(vec![Box::new(TestStateRouter)], TestTopic::Ingress);
+        let (inbound_tx, mut builder) = RexBuilder::new_connected(outbound_tx);
+        builder.with_ingress_adapter(vec![Box::new(TestStateRouter)], TestTopic::Ingress);
+
         let ctx = builder.build();
         let signal_rx = ctx.signal_queue.stream().timeout(Duration::from_millis(2));
         tokio::pin!(signal_rx);

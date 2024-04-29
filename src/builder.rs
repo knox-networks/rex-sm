@@ -1,10 +1,13 @@
 use std::time::Duration;
 
 use bigerror::{ConversionError, Report};
-use tokio::{sync::mpsc::UnboundedSender, task::JoinSet};
+use tokio::{
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    task::JoinSet,
+};
 
 use crate::{
-    ingress::{BoxedStateRouter, IngressAdapter},
+    ingress::{BoxedStateRouter, IngressAdapter, PacketRouter},
     manager::BoxedStateMachine,
     notification::NotificationQueue,
     timeout::{self, TimeoutInput, TimeoutManager},
@@ -12,9 +15,10 @@ use crate::{
     StateMachine, StateMachineManager,
 };
 
-pub struct RexBuilder<K, Out = ()>
+pub struct RexBuilder<K, In = (), Out = ()>
 where
     K: Rex,
+    In: Send + Sync + std::fmt::Debug,
     Out: Send + Sync + std::fmt::Debug,
 {
     signal_queue: SignalQueue<K>,
@@ -24,6 +28,7 @@ where
     timeout_topic: Option<<K::Message as RexMessage>::Topic>,
     tick_rate: Option<Duration>,
     outbound_tx: Option<UnboundedSender<Out>>,
+    ingress_channel: Option<(UnboundedSender<In>, UnboundedReceiver<In>)>,
 }
 
 // context used before calling build
@@ -32,23 +37,26 @@ pub struct BuilderContext<K: Rex> {
     pub notification_queue: NotificationQueue<K::Message>,
 }
 
-impl<K, Out> RexBuilder<K, Out>
+impl<K: Rex> RexBuilder<K, (), ()> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl<K, In, Out> RexBuilder<K, In, Out>
 where
     K: Rex,
     K::Message: From<TimeoutInput<K>> + TryInto<TimeoutInput<K>>,
     <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
+    In: Send + Sync + std::fmt::Debug,
+    Out: Send + Sync + std::fmt::Debug,
     TimeoutManager<K>: NotificationProcessor<K::Message>,
-    Out: Send + Sync + std::fmt::Debug + 'static,
 {
     fn ctx(&self) -> BuilderContext<K> {
         BuilderContext {
             signal_queue: self.signal_queue.clone(),
             notification_queue: self.notification_queue.clone(),
         }
-    }
-
-    pub fn new() -> Self {
-        Self::default()
     }
 
     pub fn with_sm<SM: StateMachine<K> + 'static>(&mut self, state_machine: SM) -> &mut Self {
@@ -83,31 +91,6 @@ where
     pub fn with_outbound_tx(&mut self, tx: UnboundedSender<Out>) -> &mut Self {
         self.outbound_tx = Some(tx);
         self
-    }
-
-    // this does not return `&mut Self` so that we can get access to an inbound_tx
-    pub fn build_ingress_adapter<In>(
-        &mut self,
-        state_routers: Vec<BoxedStateRouter<K, In>>,
-        ingress_topic: <K::Message as RexMessage>::Topic,
-    ) -> UnboundedSender<In>
-    where
-        for<'a> K: TryFrom<&'a In, Error = Report<ConversionError>>,
-        In: Send + Sync + std::fmt::Debug + 'static,
-        K::Input: TryFrom<In, Error = Report<ConversionError>>,
-        K::Message: TryInto<Out, Error = Report<ConversionError>>,
-    {
-        assert!(!state_routers.is_empty());
-        let outbound_tx = self
-            .outbound_tx
-            .clone()
-            .expect("builder outbound_tx uninitialized");
-        let signal_queue = self.signal_queue.clone();
-        let ingress_adapter =
-            IngressAdapter::new(signal_queue, outbound_tx, state_routers, ingress_topic);
-        let inbound_tx = ingress_adapter.inbound_tx.clone();
-        self.with_np(ingress_adapter);
-        inbound_tx
     }
 
     pub fn with_timeout_manager(
@@ -163,15 +146,96 @@ where
     pub fn build_with_handle(self, join_set: &mut JoinSet<()>) -> SmContext<K> {
         self.build_inner(join_set)
     }
+
+    // this does not return `&mut Self` so that we can get access to an inbound_tx
+    pub fn into_ingress_builder<In2, Out2>(
+        self,
+        outbound_tx: UnboundedSender<Out2>,
+    ) -> (UnboundedSender<In2>, RexBuilder<K, In2, Out2>)
+    where
+        for<'a> K: TryFrom<&'a In2, Error = Report<ConversionError>>,
+        In2: Send + Sync + std::fmt::Debug + 'static,
+        Out2: Send + Sync + std::fmt::Debug + 'static,
+        K::Input: TryFrom<In2, Error = Report<ConversionError>>,
+        K::Message: TryInto<Out2, Error = Report<ConversionError>>,
+    {
+        let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<In2>();
+        (
+            inbound_tx.clone(),
+            RexBuilder::<K, In2, Out2> {
+                signal_queue: self.signal_queue,
+                notification_queue: self.notification_queue,
+                state_machines: self.state_machines,
+                notification_processors: self.notification_processors,
+                timeout_topic: self.timeout_topic,
+                tick_rate: self.tick_rate,
+                outbound_tx: Some(outbound_tx),
+                ingress_channel: Some((inbound_tx, inbound_rx)),
+            },
+        )
+    }
 }
 
-impl<K, Out> Default for RexBuilder<K, Out>
+impl<K, In, Out> RexBuilder<K, In, Out>
 where
     K: Rex,
+
+    for<'a> K: TryFrom<&'a In, Error = Report<ConversionError>>,
+    In: Send + Sync + std::fmt::Debug + 'static,
+    Out: Send + Sync + std::fmt::Debug + 'static,
+
+    K::Input: TryFrom<In, Error = Report<ConversionError>>,
+    K::Message: TryInto<Out, Error = Report<ConversionError>>,
     K::Message: From<TimeoutInput<K>> + TryInto<TimeoutInput<K>>,
     <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
     TimeoutManager<K>: NotificationProcessor<K::Message>,
-    Out: Send + Sync + std::fmt::Debug + 'static,
+{
+    pub fn new_connected(
+        outbound_tx: UnboundedSender<Out>,
+    ) -> (UnboundedSender<In>, RexBuilder<K, In, Out>) {
+        let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<In>();
+        (
+            inbound_tx.clone(),
+            Self {
+                outbound_tx: Some(outbound_tx),
+                ingress_channel: Some((inbound_tx, inbound_rx)),
+                ..Default::default()
+            },
+        )
+    }
+    pub fn with_ingress_adapter(
+        &mut self,
+        state_routers: Vec<BoxedStateRouter<K, In>>,
+        ingress_topic: <K::Message as RexMessage>::Topic,
+    ) -> &mut Self {
+        assert!(!state_routers.is_empty());
+        let (tx, rx) = self
+            .ingress_channel
+            .take()
+            .expect("ingress_channel uninitialized");
+        let outbound_tx = self
+            .outbound_tx
+            .clone()
+            .expect("builder outbound_tx uninitialized");
+
+        let ingress_adapter = IngressAdapter {
+            signal_queue: self.signal_queue.clone(),
+            outbound_tx,
+            router: PacketRouter::new(state_routers),
+            inbound_tx: tx,
+            inbound_rx: Some(rx),
+            topic: ingress_topic.into(),
+        };
+        self.with_np(ingress_adapter);
+        self
+    }
+}
+
+impl<K, In, Out> Default for RexBuilder<K, In, Out>
+where
+    K: Rex,
+    In: Send + Sync + std::fmt::Debug,
+    Out: Send + Sync + std::fmt::Debug,
 {
     fn default() -> Self {
         Self {
@@ -182,6 +246,7 @@ where
             timeout_topic: None,
             tick_rate: None,
             outbound_tx: None,
+            ingress_channel: None,
         }
     }
 }

@@ -807,7 +807,7 @@ mod tests {
     #[tracing_test::traced_test]
     async fn state_machine() {
         // This test does not initialize the NotificationManager
-        let mut builder = RexBuilder::<_, ()>::new();
+        let mut builder = RexBuilder::new();
         builder
             .with_sm(MenuStateMachine::new())
             .with_sm(PingStateMachine)
@@ -855,7 +855,7 @@ mod tests {
     async fn state_machine_timeout() {
         let menu_sm = MenuStateMachine::new();
         let menu_failures = menu_sm.failures.clone();
-        let mut builder = RexBuilder::<_, ()>::new();
+        let mut builder = RexBuilder::new();
         builder
             .with_sm(menu_sm)
             .with_sm(PingStateMachine)
