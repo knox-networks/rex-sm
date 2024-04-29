@@ -209,6 +209,15 @@ where
             },
         )
     }
+
+    #[must_use]
+    pub fn ingress_tx(&self) -> UnboundedSender<In> {
+        self.ingress_channel
+            .as_ref()
+            .map(|(tx, _)| tx.clone())
+            .expect("ingress_channel uninitialized")
+    }
+
     #[must_use]
     pub fn with_ingress_adapter(
         mut self,
