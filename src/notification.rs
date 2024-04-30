@@ -1,13 +1,14 @@
 use std::{collections::HashMap, fmt, fmt::Debug, hash::Hash, sync::Arc};
 
 use bigerror::LogError;
-use tokio::{
-    sync::{mpsc, mpsc::UnboundedSender},
-    task::JoinSet,
-};
+use tokio::{sync::mpsc::UnboundedSender, task::JoinSet};
+use tokio_stream::StreamExt;
 use tracing::{debug, trace, warn, Instrument};
 
-use crate::{HashKind, Rex, StateId};
+use crate::{
+    queue::{StreamReceiver, StreamableDeque},
+    HashKind, Rex, StateId,
+};
 
 // a PubSub message that is able to be sent to [`NotificationProcessor`]s that subscribe to one
 // or more [`RexTopic`]s
@@ -85,6 +86,27 @@ where
     M: RexMessage,
 {
     processors: Arc<HashMap<M::Topic, Vec<Subscriber<M>>>>,
+    notification_queue: NotificationQueue<M>,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct NotificationQueue<M: RexMessage>(pub(crate) Arc<StreamableDeque<Notification<M>>>);
+
+impl<M: RexMessage> NotificationQueue<M> {
+    pub fn new() -> Self {
+        Self(Arc::new(StreamableDeque::new()))
+    }
+    pub fn send(&self, notif: Notification<M>) {
+        self.0.push_back(notif)
+    }
+
+    pub fn priority_send(&self, notif: Notification<M>) {
+        self.0.push_front(notif)
+    }
+
+    pub fn stream(&self) -> StreamReceiver<Notification<M>> {
+        self.0.stream()
+    }
 }
 
 impl<M> NotificationManager<M>
@@ -94,6 +116,7 @@ where
     pub fn new(
         processors: Vec<Box<dyn NotificationProcessor<M>>>,
         join_set: &mut JoinSet<()>,
+        notification_queue: NotificationQueue<M>,
     ) -> Self {
         let processors: HashMap<M::Topic, Vec<UnboundedSender<Notification<M>>>> = processors
             .into_iter()
@@ -109,15 +132,17 @@ where
             });
         Self {
             processors: Arc::new(processors),
+            notification_queue,
         }
     }
 
-    pub fn init(&self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<M>> {
-        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Notification<M>>();
+    pub fn init(&self, join_set: &mut JoinSet<()>) -> NotificationQueue<M> {
+        let stream_queue = self.notification_queue.clone();
         let processors = self.processors.clone();
         join_set.spawn(async move {
             debug!(spawning = "NotificationManager.processors");
-            while let Some(notification) = input_rx.recv().await {
+            let mut stream = stream_queue.stream();
+            while let Some(notification) = stream.next().await {
                 trace!(?notification);
                 let topic = notification.get_topic();
                 if let Some(subscribers) = processors.get(&topic) {
@@ -137,7 +162,7 @@ where
                 }
             }
         }.in_current_span());
-        input_tx
+        self.notification_queue.clone()
     }
 }
 
@@ -235,9 +260,10 @@ mod tests {
         let timeout_manager_two = TimeoutManager::test_default();
         let sq2 = timeout_manager_two.signal_queue.clone();
         let mut join_set = JoinSet::new();
-        let notification_manager: NotificationManager<TestMsg> = NotificationManager::new(
+        let notification_manager = NotificationManager::new(
             vec![Box::new(timeout_manager), Box::new(timeout_manager_two)],
             &mut join_set,
+            NotificationQueue::new(),
         );
         let notification_tx = notification_manager.init(&mut join_set);
 
@@ -246,7 +272,7 @@ mod tests {
         let timeout_duration = Duration::from_millis(1);
 
         let set_timeout = Notification(TimeoutInput::set_timeout(test_id, timeout_duration).into());
-        notification_tx.send(set_timeout).unwrap();
+        notification_tx.send(set_timeout);
 
         tokio::time::sleep(Duration::from_millis(10)).await;
 

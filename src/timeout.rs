@@ -169,7 +169,8 @@ where
     K: Rex,
     K::Message: From<UnaryRequest<K, Operation>>,
 {
-    pub fn set_timeout_millis(id: StateId<K>, millis: u64) -> Self {
+    #[cfg(test)]
+    pub(crate) fn set_timeout_millis(id: StateId<K>, millis: u64) -> Self {
         Self {
             id,
             op: Operation::from_millis(millis),
@@ -211,7 +212,7 @@ where
     ledger: Arc<Mutex<TimeoutLedger<K>>>,
     topic: <K::Message as RexMessage>::Topic,
 
-    pub(crate) signal_queue: Arc<SignalQueue<K>>,
+    pub(crate) signal_queue: SignalQueue<K>,
 }
 
 impl<K> TimeoutManager<K>
@@ -221,7 +222,7 @@ where
     <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
 {
     pub fn new(
-        signal_queue: Arc<SignalQueue<K>>,
+        signal_queue: SignalQueue<K>,
         topic: impl Into<<K::Message as RexMessage>::Topic>,
     ) -> Self {
         Self {
@@ -363,7 +364,7 @@ mod tests {
 
     impl TestDefault for TimeoutManager<TestKind> {
         fn test_default() -> Self {
-            let signal_queue = Arc::new(SignalQueue::new());
+            let signal_queue = SignalQueue::default();
             TimeoutManager::new(signal_queue, TestTopic::Timeout).with_tick_rate(TEST_TICK_RATE)
         }
     }

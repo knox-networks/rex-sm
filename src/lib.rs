@@ -5,6 +5,7 @@ use tokio::time::Instant;
 use tracing::error;
 use uuid::Uuid;
 
+pub mod builder;
 pub mod ingress;
 pub mod manager;
 pub mod node;
@@ -16,13 +17,14 @@ pub mod timeout;
 #[cfg(test)]
 mod test_support;
 
+pub use builder::RexBuilder;
 pub use manager::{
-    HashKind, RexBuilder, Signal, SignalExt, SignalQueue, SmContext, StateMachine, StateMachineExt,
+    HashKind, Signal, SignalExt, SignalQueue, SmContext, StateMachine, StateMachineExt,
     StateMachineManager,
 };
 pub use notification::{
-    GetTopic, Notification, NotificationManager, NotificationProcessor, Operation, Request,
-    RequestInner, RexMessage, RexTopic, Subscriber, UnaryRequest,
+    GetTopic, Notification, NotificationManager, NotificationProcessor, NotificationQueue,
+    Operation, Request, RequestInner, RexMessage, RexTopic, Subscriber, UnaryRequest,
 };
 
 /// A trait for types representing state machine lifecycles. These types should be field-less
@@ -166,5 +168,5 @@ impl<K: Kind> StateId<K> {
 
 #[derive(Debug, thiserror::Error)]
 #[error("StateMachineError")]
-pub struct StateMachineError;
-reportable!(StateMachineError);
+pub struct RexError;
+reportable!(RexError);
