@@ -169,7 +169,8 @@ where
     K: Rex,
     K::Message: From<UnaryRequest<K, Operation>>,
 {
-    pub fn set_timeout_millis(id: StateId<K>, millis: u64) -> Self {
+    #[cfg(test)]
+    pub(crate) fn set_timeout_millis(id: StateId<K>, millis: u64) -> Self {
         Self {
             id,
             op: Operation::from_millis(millis),
