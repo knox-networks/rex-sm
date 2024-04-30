@@ -77,7 +77,7 @@ where
     pub(crate) signal_queue: SignalQueue<K>,
     pub(crate) router: PacketRouter<K, In>,
     pub inbound_tx: UnboundedSender<In>,
-    // `self.inbound_rx.take()` will be used on intialization
+    // `self.inbound_rx.take()` will be used on initialization
     pub(crate) inbound_rx: Option<UnboundedReceiver<In>>,
     pub(crate) topic: <K::Message as RexMessage>::Topic,
 }
