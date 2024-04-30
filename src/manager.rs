@@ -344,12 +344,6 @@ where
             .priority_send(Notification(TimeoutInput::set_timeout(id, duration).into()))
     }
 
-    fn set_timeout_millis(&self, ctx: &SmContext<K>, id: StateId<K>, millis: u64) {
-        ctx.notification_queue.priority_send(Notification(
-            TimeoutInput::set_timeout_millis(id, millis).into(),
-        ))
-    }
-
     fn cancel_timeout(&self, ctx: &SmContext<K>, id: StateId<K>) {
         ctx.notification_queue
             .priority_send(Notification(TimeoutInput::cancel_timeout(id).into()))
