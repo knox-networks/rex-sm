@@ -52,7 +52,7 @@ where
     Out: Send + Sync + std::fmt::Debug,
     TimeoutManager<K>: NotificationProcessor<K::Message>,
 {
-    fn ctx(&self) -> BuilderContext<K> {
+    pub fn ctx(&self) -> BuilderContext<K> {
         BuilderContext {
             signal_queue: self.signal_queue.clone(),
             notification_queue: self.notification_queue.clone(),
@@ -70,8 +70,12 @@ where
         mut self,
         processor: NP,
     ) -> Self {
-        self.notification_processors.push(Box::new(processor));
+        self.push_np(processor);
         self
+    }
+
+    pub fn push_np<NP: NotificationProcessor<K::Message> + 'static>(&mut self, processor: NP) {
+        self.notification_processors.push(Box::new(processor));
     }
 
     #[must_use]
@@ -83,15 +87,16 @@ where
         self
     }
 
-    #[must_use]
-    pub fn with_boxed_np(mut self, processor: Box<dyn NotificationProcessor<K::Message>>) -> Self {
-        self.notification_processors.push(processor);
-        self
+    pub fn push_ctx_np<NP: NotificationProcessor<K::Message> + 'static>(
+        &mut self,
+        op: impl FnOnce(BuilderContext<K>) -> NP,
+    ) {
+        self.notification_processors.push(Box::new(op(self.ctx())));
     }
 
     #[must_use]
-    pub fn with_outbound_tx(mut self, tx: UnboundedSender<Out>) -> Self {
-        self.outbound_tx = Some(tx);
+    pub fn with_boxed_np(mut self, processor: Box<dyn NotificationProcessor<K::Message>>) -> Self {
+        self.notification_processors.push(processor);
         self
     }
 
