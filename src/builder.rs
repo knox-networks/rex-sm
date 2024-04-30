@@ -245,7 +245,7 @@ where
             router: PacketRouter::new(state_routers),
             inbound_tx: tx,
             inbound_rx: Some(rx),
-            topic: ingress_topic.into(),
+            topic: ingress_topic,
         };
         self.with_np(ingress_adapter)
     }
