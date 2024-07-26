@@ -456,6 +456,7 @@ mod tests {
     pub enum PingInput {
         StartSending(StateId<ComponentKind>, WhoSleeps),
         Packet(Packet),
+        #[allow(dead_code)]
         RecvTimeout(Instant),
     }
 
@@ -471,6 +472,7 @@ mod tests {
     #[derive(Clone, Debug)]
     pub enum PongInput {
         Packet(Packet),
+        #[allow(dead_code)]
         RecvTimeout(Instant),
     }
 

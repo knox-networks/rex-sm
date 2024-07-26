@@ -1,4 +1,4 @@
-use bigerror::{error_stack::Report, ConversionError, Reportable};
+use bigerror::{error_stack::Report, ConversionError, ThinContext};
 use tokio::time::Instant;
 
 use super::{Kind, Rex, State};

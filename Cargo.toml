@@ -2,8 +2,10 @@
 name = "rex-sm"
 version = "0.5.0"
 edition = "2021"
+repository = "https://github.com/knox-networks/rex-sm"
 description = "Hierarchical state machine"
 license = "MIT"
+include = ["src/**/*", "README.md", "CHANGELOG.md"]
 
 [lib]
 name = "rex"
