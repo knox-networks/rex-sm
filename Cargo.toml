@@ -11,7 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 async-trait = "0.1"
-bigerror = ">=0.8"
+bigerror = "0.9.0-alpha"
 dashmap = "5"
 futures = "0.3"
 parking_lot = "0.12"
