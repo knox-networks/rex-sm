@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.5.1 (2024-07-29)
 
 - Updated bigerror to 0.9
 
@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 1 commit contributed to the release.
- - 87 days passed between releases.
+ - 2 commits contributed to the release over the course of 2 calendar days.
+ - 89 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - * CHANGELOG.md ([`436b38a`](https://github.com/knox-networks/rex-sm/commit/436b38affd824ce11bef2b16ba910083cb776507))
     - Updated to bigerror 0.9 ([`6eb1a9f`](https://github.com/knox-networks/rex-sm/commit/6eb1a9f3e5c43765c2c91e55e2aba5d6054015e6))
 </details>
 
