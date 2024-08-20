@@ -143,7 +143,7 @@ where
     K: Kind,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "({:?}<{}>)", self.kind, self.uuid)
+        write!(f, "{:?}<{}>", self.kind, base36::encode(self.uuid.as_ref()))
     }
 }
 
