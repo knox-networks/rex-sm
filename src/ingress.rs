@@ -43,6 +43,7 @@ impl<K, In> PacketRouter<K, In>
 where
     for<'a> K: HashKind + TryFrom<&'a In, Error = Report<ConversionError>>,
 {
+    #[must_use]
     pub fn new(state_routers: Vec<BoxedStateRouter<K, In>>) -> Self {
         let mut router_map: HashMap<K, BoxedStateRouter<K, In>> = HashMap::new();
         for router in state_routers {
@@ -58,7 +59,7 @@ where
 
     fn get_id(&self, packet: &In) -> Result<Option<StateId<K>>, Report<RexError>> {
         let kind = K::try_from(packet);
-        let kind = kind.map_err(|e| e.into_ctx())?;
+        let kind = kind.map_err(IntoContext::into_ctx)?;
         let Some(router) = self.0.get(&kind) else {
             return Ok(None);
         };

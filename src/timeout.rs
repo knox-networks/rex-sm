@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt,
+    iter::IntoIterator,
     sync::Arc,
     time::Duration,
 };
@@ -57,7 +58,7 @@ fn hms_string(duration: Duration) -> String {
     hms
 }
 
-/// TimeoutLedger` contains a [`BTreeMap`] that uses [`Instant`]s to time out
+/// `TimeoutLedger` contains a [`BTreeMap`] that uses [`Instant`]s to time out
 /// specific [`StateId`]s and a [`HashMap`] that indexes `Instant`s by [`StateId`].
 ///
 /// This double indexing allows [`Operation::Cancel`]s to go
@@ -153,10 +154,12 @@ impl std::fmt::Display for Operation {
 }
 
 impl Operation {
+    #[must_use]
     pub fn from_duration(duration: Duration) -> Self {
         Self::Set(Instant::now() + duration)
     }
 
+    #[must_use]
     pub fn from_millis(millis: u64) -> Self {
         Self::Set(Instant::now() + Duration::from_millis(millis))
     }
@@ -221,6 +224,7 @@ where
     K::Message: TryInto<TimeoutInput<K>>,
     <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
 {
+    #[must_use]
     pub fn new(
         signal_queue: SignalQueue<K>,
         topic: impl Into<<K::Message as RexMessage>::Topic>,
@@ -233,6 +237,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn with_tick_rate(self, tick_rate: Duration) -> Self {
         Self { tick_rate, ..self }
     }
@@ -309,7 +314,7 @@ where
                     for id in expired
                         .iter()
                         .filter_map(|t| ledger.timers.remove(t))
-                        .flat_map(|set| set.into_iter())
+                        .flat_map(IntoIterator::into_iter)
                         .collect::<Vec<_>>()
                     {
                         warn!(%id, "timed out");

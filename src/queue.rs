@@ -64,7 +64,7 @@ impl<T> RawDeque<T> {
     }
 }
 
-/// This type acts similarly to std::collections::VecDeque but
+/// This type acts similarly to `std::collections::VecDeque` but
 /// modifying queue is async
 pub struct StreamableDeque<T> {
     inner: Mutex<RawDeque<T>>,
@@ -85,7 +85,7 @@ impl<T> Default for StreamableDeque<T> {
 }
 
 impl<T> StreamableDeque<T> {
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self::default()
     }
 
@@ -105,8 +105,8 @@ impl<T> StreamableDeque<T> {
         inner.notify_rx();
     }
 
-    /// Returns a stream of items using pop_front()
-    /// This opens us up to handle a back_stream() as well
+    /// Returns a stream of items using `pop_front()`
+    /// This opens us up to handle a `back_stream()` as well
     pub fn stream(&self) -> StreamReceiver<T> {
         StreamReceiver {
             queue: self,
@@ -149,23 +149,19 @@ impl<'a, T> Stream for StreamReceiver<'a, T> {
             .pop_front()
             .or_else(|| inner.back_values.pop_front());
 
-        match value {
-            Some(v) => {
-                self.awake = None;
-                Poll::Ready(Some(v))
-            }
-            // if queue has no entries
-            None => {
-                // TODO avoid allocation of a new AtomicBool if possible
-                let awake = Arc::new(AtomicBool::new(false));
-                // push stream's waker onto buffer
-                inner.rx_notifiers.push_back(ReceiverNotifier {
-                    handle: ctx.waker().clone(),
-                    awake: awake.clone(),
-                });
-                self.awake = Some(awake);
-                Poll::Pending
-            }
+        if let Some(v) = value {
+            self.awake = None;
+            Poll::Ready(Some(v))
+        } else {
+            // TODO avoid allocation of a new AtomicBool if possible
+            let awake = Arc::new(AtomicBool::new(false));
+            // push stream's waker onto buffer
+            inner.rx_notifiers.push_back(ReceiverNotifier {
+                handle: ctx.waker().clone(),
+                awake: awake.clone(),
+            });
+            self.awake = Some(awake);
+            Poll::Pending
         }
     }
 }

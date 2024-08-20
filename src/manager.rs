@@ -59,7 +59,7 @@ use crate::{
     node::{Insert, Node, Update},
     notification::{Notification, NotificationQueue},
     queue::StreamableDeque,
-    storage::*,
+    storage::{StateStore, Tree},
     timeout::TimeoutInput,
     Kind, Rex, State, StateId,
 };
@@ -105,7 +105,7 @@ where
 
 pub type SignalQueue<K> = Arc<StreamableDeque<Signal<K>>>;
 
-/// [SignalExt] calls [`Signal::state_change`] to consume a [`Kind::State`] and emit
+/// [`SignalExt`] calls [`Signal::state_change`] to consume a [`Kind::State`] and emit
 /// a state change [`Signal`] with a valid [`StateMachine::Input`]
 pub trait SignalExt<K>
 where
@@ -179,7 +179,7 @@ impl<K> StateMachineManager<K>
 where
     K: Rex,
 {
-    pub fn context(&self) -> SmContext<K> {
+    #[must_use] pub fn context(&self) -> SmContext<K> {
         SmContext {
             signal_queue: self.signal_queue.clone(),
             notification_queue: self.notification_queue.clone(),
@@ -288,7 +288,7 @@ where
     /// NOTE [`StateMachineExt::new`] is created without a hierarchy
     fn create_tree(&self, ctx: &SmContext<K>, id: StateId<K>) {
         ctx.state_store
-            .insert_ref(id, Arc::new(FairMutex::new(Node::new(id))))
+            .insert_ref(id, Arc::new(FairMutex::new(Node::new(id))));
     }
 
     fn has_state(&self, ctx: &SmContext<K>, id: StateId<K>) -> bool {
@@ -341,12 +341,12 @@ where
 
     fn set_timeout(&self, ctx: &SmContext<K>, id: StateId<K>, duration: Duration) {
         ctx.notification_queue
-            .priority_send(Notification(TimeoutInput::set_timeout(id, duration).into()))
+            .priority_send(Notification(TimeoutInput::set_timeout(id, duration).into()));
     }
 
     fn cancel_timeout(&self, ctx: &SmContext<K>, id: StateId<K>) {
         ctx.notification_queue
-            .priority_send(Notification(TimeoutInput::cancel_timeout(id).into()))
+            .priority_send(Notification(TimeoutInput::cancel_timeout(id).into()));
     }
 
     fn get_parent_id(&self, ctx: &SmContext<K>, id: StateId<K>) -> Option<StateId<K>> {
@@ -765,7 +765,7 @@ mod tests {
                     who_sleeps,
                 }) => {
                     if msg == 0 {
-                        self.update(&ctx, id, ComponentState::Pong(PongState::Responding))
+                        self.update(&ctx, id, ComponentState::Pong(PongState::Responding));
                     }
                     msg += 5;
 

@@ -38,7 +38,7 @@ pub struct BuilderContext<K: Rex> {
 }
 
 impl<K: Rex> RexBuilder<K, (), ()> {
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self::default()
     }
 }

@@ -77,7 +77,7 @@ pub trait State: fmt::Debug + Send + PartialEq + Copy {
 
     /// `&dyn Kind<State = Self>` cannot do direct partial comparison
     /// due to type opacity
-    /// so State::new_state(self) is called to allow a vtable lookup
+    /// so `State::new_state(self)` is called to allow a vtable lookup
     fn kind_eq(&self, kind: &dyn Kind<State = Self>) -> bool
     where
         Self: Sized,

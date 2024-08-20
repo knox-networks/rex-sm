@@ -30,7 +30,7 @@ where
 pub(crate) type Tree<K> = Arc<FairMutex<Node<StateId<K>, <K as Kind>::State>>>;
 
 impl<K: Rex> StateStore<StateId<K>, K::State> {
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self {
             trees: DashMap::new(),
         }

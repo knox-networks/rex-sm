@@ -43,6 +43,7 @@ where
     S: State,
     Id: Copy + Eq + PartialEq + Hash + fmt::Display + Kind<State = S> + fmt::Debug,
 {
+    #[must_use]
     pub fn new(id: Id) -> Self {
         Self {
             id,
@@ -52,6 +53,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn zipper(self) -> Zipper<Id, S> {
         Zipper {
             node: self,
@@ -60,6 +62,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn get(&self, id: Id) -> Option<&Node<Id, S>> {
         if self.id == id {
             return Some(self);
@@ -75,10 +78,12 @@ where
         Some(node)
     }
 
+    #[must_use]
     pub fn get_state(&self, id: Id) -> Option<&S> {
         self.get(id).map(|n| &n.state)
     }
 
+    #[must_use]
     pub fn child(&self, id: Id) -> Option<&Node<Id, S>> {
         self.children
             .iter()
@@ -86,6 +91,7 @@ where
     }
 
     // get array index by of node with Id in self.descendant_keys
+    #[must_use]
     pub fn child_idx(&self, id: Id) -> Option<usize> {
         self.children
             .iter()
@@ -109,6 +115,7 @@ where
     }
 
     /// inserts a new node using self by value
+    #[must_use]
     pub fn into_insert(self, Insert { parent_id, id }: Insert<Id>) -> Node<Id, S> {
         // inserts at this point should be guaranteed Some(id)
         // ince a parent_id.is_none() should be handled by the node
@@ -121,6 +128,7 @@ where
             .finish_insert(id)
     }
 
+    #[must_use]
     pub fn get_parent_id(&self, id: Id) -> Option<Id> {
         // root_node edge case
         if !self.descendant_keys.contains(&id) {
@@ -180,6 +188,7 @@ where
         std::mem::swap(&mut swap_node, self);
     }
 
+    #[must_use]
     pub fn into_update(self, Update { id, state }: Update<Id, S>) -> Node<Id, S> {
         self.zipper().by_id(id).set_state(state).finish_update()
     }
@@ -214,9 +223,10 @@ where
             self = self.child(idx);
             contains_id = self.node.descendant_keys.contains(&id);
         }
-        if self.node.id != id {
-            panic!("id[{id}] should be in the node, this is a bug");
-        }
+        assert!(
+            !(self.node.id != id),
+            "id[{id}] should be in the node, this is a bug"
+        );
         self
     }
 
@@ -283,6 +293,7 @@ where
         self.node
     }
 
+    #[must_use]
     pub fn finish_update(mut self) -> Node<Id, S> {
         while self.parent.is_some() {
             self = self.parent();
