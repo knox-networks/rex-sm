@@ -183,12 +183,12 @@ where
     state_store: Arc<StateStore<StateId<K>, K::State>>,
 }
 
-pub struct CtxBuilder<K: Rex> {
+pub struct EmptyContext<K: Rex> {
     pub signal_queue: SignalQueue<K>,
     pub notification_queue: NotificationQueue<K::Message>,
     pub state_store: Arc<StateStore<StateId<K>, K::State>>,
 }
-impl<K: Rex> CtxBuilder<K> {
+impl<K: Rex> EmptyContext<K> {
     fn init(&self, id: StateId<K>) -> SmContext<K> {
         SmContext {
             signal_queue: self.signal_queue.clone(),
@@ -204,8 +204,8 @@ where
     K: Rex,
 {
     #[must_use]
-    pub fn ctx_builder(&self) -> CtxBuilder<K> {
-        CtxBuilder {
+    pub fn ctx_builder(&self) -> EmptyContext<K> {
+        EmptyContext {
             signal_queue: self.signal_queue.clone(),
             notification_queue: self.notification_queue.clone(),
             state_store: self.state_store.clone(),
