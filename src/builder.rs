@@ -8,7 +8,7 @@ use tokio::{
 
 use crate::{
     ingress::{BoxedStateRouter, IngressAdapter, PacketRouter},
-    manager::BoxedStateMachine,
+    manager::{BoxedStateMachine, CtxBuilder},
     notification::NotificationQueue,
     timeout::{self, Retain, Return, TimeoutManager},
     NotificationManager, NotificationProcessor, Rex, RexMessage, SignalQueue, SmContext,
@@ -123,7 +123,7 @@ where
         }
     }
 
-    fn build_inner(mut self, join_set: &mut JoinSet<()>) -> SmContext<K> {
+    fn build_inner(mut self, join_set: &mut JoinSet<()>) -> CtxBuilder<K> {
         self.build_timeout_manager();
 
         if !self.notification_processors.is_empty() {
@@ -141,10 +141,10 @@ where
         );
 
         sm_manager.init(join_set);
-        sm_manager.context()
+        sm_manager.ctx_builder()
     }
 
-    pub fn build(self) -> SmContext<K> {
+    pub fn build(self) -> CtxBuilder<K> {
         let mut join_set = JoinSet::new();
         let ctx = self.build_inner(&mut join_set);
         join_set.detach_all();
@@ -152,7 +152,7 @@ where
         ctx
     }
 
-    pub fn build_with_handle(self, join_set: &mut JoinSet<()>) -> SmContext<K> {
+    pub fn build_with_handle(self, join_set: &mut JoinSet<()>) -> CtxBuilder<K> {
         self.build_inner(join_set)
     }
 

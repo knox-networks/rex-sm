@@ -146,7 +146,9 @@ where
             f,
             "{:?}<{}>",
             self.kind,
-            bs58::encode(self.uuid).into_string()
+            self.is_nil()
+                .then(|| bs58::encode(self.uuid).into_string())
+                .unwrap_or_else(|| "NIL".to_string())
         )
     }
 }
@@ -158,6 +160,13 @@ impl<K: Kind> StateId<K> {
 
     pub fn new_rand(kind: K) -> Self {
         Self::new(kind, Uuid::new_v4())
+    }
+
+    pub fn nil(kind: K) -> Self {
+        Self::new(kind, Uuid::nil())
+    }
+    pub fn is_nil(&self) -> bool {
+        self.uuid == Uuid::nil()
     }
     // for testing purposes, easily distinguish UUIDs
     // by numerical value

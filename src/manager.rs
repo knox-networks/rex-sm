@@ -133,6 +133,7 @@ where
     pub signal_queue: SignalQueue<K>,
     pub notification_queue: NotificationQueue<K::Message>,
     pub state_store: Arc<StateStore<StateId<K>, K::State>>,
+    pub id: StateId<K>,
 }
 
 impl<K> SmContext<K>
@@ -143,10 +144,17 @@ where
         self.notification_queue.send(notification);
     }
 
-    pub fn get_state(&self, id: StateId<K>) -> Option<K::State> {
-        let tree = self.state_store.get_tree(id)?;
+    pub fn get_state(&self) -> Option<K::State> {
+        let tree = self.state_store.get_tree(self.id)?;
         let guard = tree.lock();
-        guard.get_state(id).copied()
+        guard.get_state(self.id).copied()
+    }
+
+    fn get_tree(&self) -> Option<Tree<K>> {
+        self.state_store.get_tree(self.id)
+    }
+    pub fn has_state(&self) -> bool {
+        self.state_store.get_tree(self.id).is_some()
     }
 }
 impl<K> Clone for SmContext<K>
@@ -158,6 +166,7 @@ where
             signal_queue: self.signal_queue.clone(),
             notification_queue: self.notification_queue.clone(),
             state_store: self.state_store.clone(),
+            id: self.id,
         }
     }
 }
@@ -174,13 +183,29 @@ where
     state_store: Arc<StateStore<StateId<K>, K::State>>,
 }
 
+pub struct CtxBuilder<K: Rex> {
+    signal_queue: SignalQueue<K>,
+    notification_queue: NotificationQueue<K::Message>,
+    state_store: Arc<StateStore<StateId<K>, K::State>>,
+}
+impl<K: Rex> CtxBuilder<K> {
+    fn init(&self, id: StateId<K>) -> SmContext<K> {
+        SmContext {
+            signal_queue: self.signal_queue.clone(),
+            notification_queue: self.notification_queue.clone(),
+            state_store: self.state_store.clone(),
+            id,
+        }
+    }
+}
+
 impl<K> StateMachineManager<K>
 where
     K: Rex,
 {
     #[must_use]
-    pub fn context(&self) -> SmContext<K> {
-        SmContext {
+    pub fn ctx_builder(&self) -> CtxBuilder<K> {
+        CtxBuilder {
             signal_queue: self.signal_queue.clone(),
             notification_queue: self.notification_queue.clone(),
             state_store: self.state_store.clone(),
@@ -215,20 +240,20 @@ where
     pub fn init(&self, join_set: &mut JoinSet<()>) {
         let stream_queue = self.signal_queue.clone();
         let sm_dispatcher = self.state_machines.clone();
-        let ctx = self.context();
+        let ctx = self.ctx_builder();
         join_set.spawn(
             async move {
                 debug!(target:  "state_machine", spawning = "StateMachineManager.signal_queue");
                 let mut stream = stream_queue.stream();
                 while let Some(Signal { id, input }) = stream.next().await {
-                    let Ok(sm) = sm_dispatcher
+                    if let Ok(sm) = sm_dispatcher
                         .get(&id)
                         .expect_kv("state_machine", id)
                         .and_log_err()
-                    else {
+                    {
+                        sm.process(ctx.init(id), input);
                         continue;
-                    };
-                    sm.process(ctx.clone(), id, input);
+                    }
                 }
             }
             .in_current_span(),
@@ -246,32 +271,24 @@ pub trait StateMachine<K>: Send + Sync
 where
     K: Rex,
 {
-    fn process(&self, ctx: SmContext<K>, id: StateId<K>, input: K::Input);
+    fn process(&self, ctx: SmContext<K>, input: K::Input);
 
     fn get_kind(&self) -> K;
 
-    fn get_state(&self, ctx: &SmContext<K>, id: StateId<K>) -> Option<K::State> {
-        let tree = ctx.state_store.get_tree(id)?;
-        let guard = tree.lock();
-        guard.get_state(id).copied()
-    }
-
-    fn get_tree(&self, ctx: &SmContext<K>, id: StateId<K>) -> Option<Tree<K>> {
-        ctx.state_store.get_tree(id)
-    }
-
-    fn new_child(&self, ctx: &SmContext<K>, id: StateId<K>, parent_id: StateId<K>) {
-        let tree = ctx.state_store.get_tree(parent_id).unwrap();
+    fn new_child(&self, ctx: &SmContext<K>, child_id: StateId<K>) {
+        let id = ctx.id;
+        let tree = ctx.state_store.get_tree(id).unwrap();
         ctx.state_store.insert_ref(id, tree.clone());
         let mut tree = tree.lock();
         tree.insert(Insert {
-            parent_id: Some(parent_id),
-            id,
+            parent_id: Some(ctx.id),
+            id: child_id,
         });
     }
 
     /// Panic: will panic if passed in an id without a previously stored state
-    fn update(&self, ctx: &SmContext<K>, id: StateId<K>, state: K::State) {
+    fn update(&self, ctx: &SmContext<K>, state: K::State) {
+        let id = ctx.id;
         let tree = ctx.state_store.get_tree(id).expect("missing id for update");
         let mut guard = tree.lock();
 
@@ -285,21 +302,20 @@ where
     K::Message: Retain<K>,
 {
     /// NOTE [`StateMachineExt::new`] is created without a hierarchy
-    fn create_tree(&self, ctx: &SmContext<K>, id: StateId<K>) {
+    fn create_tree(&self, ctx: &SmContext<K>) {
+        let id = ctx.id;
         ctx.state_store
             .insert_ref(id, Arc::new(FairMutex::new(Node::new(id))));
     }
 
-    fn has_state(&self, ctx: &SmContext<K>, id: StateId<K>) -> bool {
-        ctx.state_store.get_tree(id).is_some()
+    fn fail(&self, ctx: &SmContext<K>) -> Option<StateId<K>> {
+        let id = ctx.id;
+        self.update_state_and_signal(ctx, id.failed_state())
     }
 
-    fn fail(&self, ctx: &SmContext<K>, id: StateId<K>) -> Option<StateId<K>> {
-        self.update_state_and_signal(ctx, id, id.failed_state())
-    }
-
-    fn complete(&self, ctx: &SmContext<K>, id: StateId<K>) -> Option<StateId<K>> {
-        self.update_state_and_signal(ctx, id, id.completed_state())
+    fn complete(&self, ctx: &SmContext<K>) -> Option<StateId<K>> {
+        let id = ctx.id;
+        self.update_state_and_signal(ctx, id.completed_state())
     }
 
     /// represents a state that will no longer change
@@ -312,13 +328,9 @@ where
     /// structure of a state hierarchy and _should_ be just as performant on a single
     /// state tree as it is for multiple states.
     /// Returns the parent's [`StateId`] if there was one.
-    fn update_state_and_signal(
-        &self,
-        ctx: &SmContext<K>,
-        id: StateId<K>,
-        state: K::State,
-    ) -> Option<StateId<K>> {
-        let Some(tree) = self.get_tree(ctx, id) else {
+    fn update_state_and_signal(&self, ctx: &SmContext<K>, state: K::State) -> Option<StateId<K>> {
+        let id = ctx.id;
+        let Some(tree) = ctx.get_tree() else {
             // TODO propagate error
             tracing::error!(%id, "Tree not found!");
             panic!("missing SmTree");
@@ -338,9 +350,10 @@ where
         ctx.notify(Notification(msg.into()));
     }
 
-    fn set_timeout(&self, ctx: &SmContext<K>, id: StateId<K>, duration: Duration) {
-        ctx.notification_queue
-            .priority_send(Notification(TimeoutInput::set_timeout(id, duration).into()));
+    fn set_timeout(&self, ctx: &SmContext<K>, duration: Duration) {
+        ctx.notification_queue.priority_send(Notification(
+            TimeoutInput::set_timeout(ctx.id, duration).into(),
+        ));
     }
 
     fn return_in(
@@ -355,15 +368,15 @@ where
         ));
     }
 
-    fn cancel_timeout(&self, ctx: &SmContext<K>, id: StateId<K>) {
+    fn cancel_timeout(&self, ctx: &SmContext<K>) {
         ctx.notification_queue
-            .priority_send(Notification(TimeoutInput::cancel_timeout(id).into()));
+            .priority_send(Notification(TimeoutInput::cancel_timeout(ctx.id).into()));
     }
 
-    fn get_parent_id(&self, ctx: &SmContext<K>, id: StateId<K>) -> Option<StateId<K>> {
-        self.get_tree(ctx, id).and_then(|tree| {
+    fn get_parent_id(&self, ctx: &SmContext<K>) -> Option<StateId<K>> {
+        ctx.get_tree().and_then(|tree| {
             let guard = tree.lock();
-            guard.get_parent_id(id)
+            guard.get_parent_id(ctx.id)
         })
     }
 }
@@ -590,13 +603,14 @@ mod tests {
 
     impl StateMachine<Game> for MenuStateMachine {
         #[instrument(name = "menu", skip_all)]
-        fn process(&self, ctx: SmContext<Game>, id: StateId<Game>, input: Input) {
+        fn process(&self, ctx: SmContext<Game>, input: Input) {
+            let id = ctx.id;
             let Input::Menu(input) = input else {
                 error!(input = ?input, "invalid input!");
                 return;
             };
 
-            let state = self.get_state(&ctx, id);
+            let state = ctx.get_state();
             if let Some(true) = state.map(Self::terminal_state) {
                 warn!(%id, ?state, "Ignoring input due to invalid state");
                 return;
@@ -630,15 +644,17 @@ mod tests {
                 }
                 MenuInput::PingPongComplete => {
                     info!("I'M DONE!");
-                    self.complete(&ctx, id);
+                    self.complete(&ctx);
                 }
                 failure @ (MenuInput::FailedPing | MenuInput::FailedPong) => {
-                    let tree = self.get_tree(&ctx, id).unwrap();
+                    let tree = ctx.get_tree().unwrap();
                     let mut guard = tree.lock();
                     // set all states to failed state
                     guard.update_all_fn(|mut z| {
                         z.node.state.fail();
-                        self.cancel_timeout(&ctx, z.node.id); // cancel all other timeouts
+                        let id = z.node.id;
+                        ctx.notification_queue
+                            .priority_send(Notification(TimeoutInput::cancel_timeout(id).into()));
                         z.finish_update()
                     });
 
@@ -665,12 +681,13 @@ mod tests {
 
     impl StateMachine<Game> for PingStateMachine {
         #[instrument(name = "ping", skip_all)]
-        fn process(&self, ctx: SmContext<Game>, id: StateId<Game>, input: Input) {
+        fn process(&self, ctx: SmContext<Game>, input: Input) {
+            let id = ctx.id;
             let Input::Ping(input) = input else {
                 error!(?input, "invalid input!");
                 return;
             };
-            let state = self.get_state(&ctx, id).unwrap();
+            let state = ctx.get_state().unwrap();
             if Self::terminal_state(state) {
                 warn!(%id, ?state, "Ignoring input due to invalid state");
                 return;
