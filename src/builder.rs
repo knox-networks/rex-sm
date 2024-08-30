@@ -11,8 +11,8 @@ use crate::{
     manager::{BoxedStateMachine, CtxBuilder},
     notification::NotificationQueue,
     timeout::{self, Retain, Return, TimeoutManager},
-    NotificationManager, NotificationProcessor, Rex, RexMessage, SignalQueue, SmContext,
-    StateMachine, StateMachineManager,
+    NotificationManager, NotificationProcessor, Rex, RexMessage, SignalQueue, StateMachine,
+    StateMachineManager,
 };
 
 pub struct RexBuilder<K, In = (), Out = ()>

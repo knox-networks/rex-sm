@@ -184,9 +184,9 @@ where
 }
 
 pub struct CtxBuilder<K: Rex> {
-    signal_queue: SignalQueue<K>,
-    notification_queue: NotificationQueue<K::Message>,
-    state_store: Arc<StateStore<StateId<K>, K::State>>,
+    pub signal_queue: SignalQueue<K>,
+    pub notification_queue: NotificationQueue<K::Message>,
+    pub state_store: Arc<StateStore<StateId<K>, K::State>>,
 }
 impl<K: Rex> CtxBuilder<K> {
     fn init(&self, id: StateId<K>) -> SmContext<K> {
@@ -356,15 +356,9 @@ where
         ));
     }
 
-    fn return_in(
-        &self,
-        ctx: &SmContext<K>,
-        id: StateId<K>,
-        item: RetainItem<K>,
-        duration: Duration,
-    ) {
+    fn return_in(&self, ctx: &SmContext<K>, item: RetainItem<K>, duration: Duration) {
         ctx.notification_queue.priority_send(Notification(
-            TimeoutInput::retain(id, item, duration).into(),
+            TimeoutInput::retain(ctx.id, item, duration).into(),
         ));
     }
 
@@ -695,7 +689,7 @@ mod tests {
 
             match input {
                 PingInput::StartSending(pong_id, who_holds) => {
-                    self.update(&ctx, id, GameState::Ping(PingState::Sending));
+                    self.update(&ctx, GameState::Ping(PingState::Sending));
                     info!(msg = 0, "PINGING");
                     ctx.signal_queue.push_back(Signal {
                         id: pong_id,
@@ -709,32 +703,32 @@ mod tests {
                 }
                 PingInput::Packet(Packet { msg: 25.., .. }) => {
                     info!("PING Complete!");
-                    self.complete(&ctx, id);
-                    self.cancel_timeout(&ctx, id);
+                    self.complete(&ctx);
+                    self.cancel_timeout(&ctx);
                 }
                 PingInput::Packet(mut packet) => {
-                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
+                    self.set_timeout(&ctx, TEST_TIMEOUT);
                     packet.msg += 5;
 
                     if let WhoHolds(Some(Game::Ping)) = packet.who_holds {
                         info!(msg = packet.msg, "HOLDING");
                         // hold for half theduration of the message
                         let hold_for = Duration::from_millis(packet.msg);
-                        self.return_in(&ctx, id, Hold(packet), hold_for);
+                        self.return_in(&ctx, Hold(packet), hold_for);
                         return;
                     }
 
                     info!(msg = packet.msg, "PINGING");
-                    return_packet(&ctx, id, packet);
+                    return_packet(&ctx, packet);
                 }
                 PingInput::Returned(Hold(packet)) => {
-                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
+                    self.set_timeout(&ctx, TEST_TIMEOUT);
                     info!(msg = packet.msg, "PINGING");
-                    return_packet(&ctx, id, packet);
+                    return_packet(&ctx, packet);
                 }
 
                 PingInput::RecvTimeout(_) => {
-                    self.fail(&ctx, id);
+                    self.fail(&ctx);
                 }
             }
         }
@@ -747,15 +741,15 @@ mod tests {
     struct PongStateMachine;
 
     impl StateMachine<Game> for PongStateMachine {
-        #[instrument(name = "pong", skip_all)]
-        fn process(&self, ctx: SmContext<Game>, id: StateId<Game>, input: Input) {
+        #[instrument(name = "pong", skip_all, fields(id = %ctx.id))]
+        fn process(&self, ctx: SmContext<Game>, input: Input) {
             let Input::Pong(input) = input else {
                 error!(?input, "invalid input!");
                 return;
             };
-            let state = self.get_state(&ctx, id).unwrap();
+            let state = ctx.get_state().unwrap();
             if Self::terminal_state(state) {
-                warn!(%id, ?state, "Ignoring input due to invalid state");
+                warn!(?state, "Ignoring input due to invalid state");
                 return;
             }
 
@@ -768,21 +762,21 @@ mod tests {
                 }) => {
                     msg += 5;
                     info!(?msg, "PONGING");
-                    self.complete(&ctx, id);
-                    self.cancel_timeout(&ctx, id);
+                    self.complete(&ctx);
+                    self.cancel_timeout(&ctx);
                     ctx.signal_queue.push_back(Signal {
                         id: sender,
                         input: Input::Ping(PingInput::Packet(Packet {
                             msg,
-                            sender: id,
+                            sender: ctx.id,
                             who_holds,
                         })),
                     });
                 }
                 PongInput::Packet(mut packet) => {
-                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
+                    self.set_timeout(&ctx, TEST_TIMEOUT);
                     if packet.msg == 0 {
-                        self.update(&ctx, id, GameState::Pong(PongState::Responding));
+                        self.update(&ctx, GameState::Pong(PongState::Responding));
                     }
                     packet.msg += 5;
 
@@ -790,25 +784,20 @@ mod tests {
                         info!(msg = packet.msg, "HOLDING");
                         // hold for half theduration of the message
                         let hold_for = Duration::from_millis(packet.msg);
-                        self.return_in(&ctx, id, Hold(packet), hold_for);
+                        self.return_in(&ctx, Hold(packet), hold_for);
                         return;
                     }
 
                     info!(msg = packet.msg, "PONGING");
-                    let recipient = packet.sender;
-                    packet.sender = id;
-                    ctx.signal_queue.push_back(Signal {
-                        id: recipient,
-                        input: PingInput::Packet(packet).into(),
-                    });
+                    return_packet(&ctx, packet);
                 }
                 PongInput::Returned(Hold(packet)) => {
-                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
+                    self.set_timeout(&ctx, TEST_TIMEOUT);
                     info!(msg = packet.msg, "PONGING");
-                    return_packet(&ctx, id, packet);
+                    return_packet(&ctx, packet);
                 }
                 PongInput::RecvTimeout(_) => {
-                    self.fail(&ctx, id);
+                    self.fail(&ctx);
                 }
             }
         }
@@ -816,12 +805,12 @@ mod tests {
             Game::Pong
         }
     }
-    fn return_packet(ctx: &SmContext<Game>, id: StateId<Game>, mut packet: Packet) {
+    fn return_packet(ctx: &SmContext<Game>, mut packet: Packet) {
         let recipient = packet.sender;
-        packet.sender = id;
+        packet.sender = ctx.id;
         ctx.signal_queue.push_back(Signal {
             id: recipient,
-            input: match *id {
+            input: match *ctx.id {
                 Game::Ping => PongInput::Packet(packet).into(),
                 Game::Pong => PingInput::Packet(packet).into(),
                 Game::Menu => unreachable!(),
