@@ -1,7 +1,6 @@
 use std::fmt;
 
 use bigerror::reportable;
-use timeout::Return;
 use tokio::time::Instant;
 use tracing::error;
 use uuid::Uuid;

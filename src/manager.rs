@@ -48,7 +48,6 @@
 
 use std::{collections::HashMap, fmt, hash::Hash, sync::Arc, time::Duration};
 
-use async_trait::async_trait;
 use bigerror::{LogError, OptionReport};
 use parking_lot::FairMutex;
 use tokio::task::JoinSet;

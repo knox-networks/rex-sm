@@ -10,7 +10,7 @@ use crate::{
     ingress::{BoxedStateRouter, IngressAdapter, PacketRouter},
     manager::BoxedStateMachine,
     notification::NotificationQueue,
-    timeout::{self, Retain, Return, TimeoutInput, TimeoutManager, TimeoutOp},
+    timeout::{self, Retain, Return, TimeoutManager},
     NotificationManager, NotificationProcessor, Rex, RexMessage, SignalQueue, SmContext,
     StateMachine, StateMachineManager,
 };

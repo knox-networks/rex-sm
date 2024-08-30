@@ -19,7 +19,6 @@ use tracing::{debug, error, instrument, warn, Instrument};
 
 use crate::{
     manager::{HashKind, Signal, SignalQueue},
-    notification,
     notification::{Notification, NotificationProcessor, RexMessage, UnaryRequest},
     Kind, Rex, StateId,
 };
@@ -67,8 +66,9 @@ where
 {
     timers: BTreeMap<Instant, HashSet<StateId<K>>>,
     ids: HashMap<StateId<K>, Instant>,
-    retainer: BTreeMap<Instant, Vec<(StateId<K>, RetainItem<K>)>>,
+    retainer: BTreeMap<Instant, Vec<RetainPair<K>>>,
 }
+type RetainPair<K> = (StateId<K>, RetainItem<K>);
 
 impl<K> TimeoutLedger<K>
 where
@@ -361,8 +361,7 @@ where
                     let mut release = ledger.retainer.split_off(&now);
                     std::mem::swap(&mut release, &mut ledger.retainer);
                     for (id, item) in release
-                        .into_iter()
-                        .map(|(_, v)| v)
+                        .into_values()
                         .flat_map(IntoIterator::into_iter)
                         .collect::<Vec<_>>()
                     {
@@ -370,10 +369,7 @@ where
                         if let Some(input) = id.return_item(item) {
                             // caveat with this push_front setup is
                             // that later timeouts will be on top of the stack
-                            signal_queue.push_front(Signal {
-                                id,
-                                input: input.into(),
-                            });
+                            signal_queue.push_front(Signal { id, input });
                         } else {
                             warn!(%id, "timeout not supported!");
                         }
