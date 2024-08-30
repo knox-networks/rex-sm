@@ -772,7 +772,7 @@ mod tests {
                     if let WhoHolds(Some(Game::Pong)) = packet.who_holds {
                         info!(msg = packet.msg, "HOLDING");
                         // hold for half theduration of the message
-                        let hold_for = Duration::from_millis(packet.msg) / 2;
+                        let hold_for = Duration::from_millis(packet.msg);
                         self.return_in(&ctx, id, Hold(packet), hold_for);
                         return;
                     }
