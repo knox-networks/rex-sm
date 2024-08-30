@@ -395,14 +395,14 @@ mod tests {
         Rex, RexBuilder, RexMessage,
     };
 
-    impl From<TimeoutInput<ComponentKind>> for GameMsg {
-        fn from(value: TimeoutInput<ComponentKind>) -> Self {
+    impl From<TimeoutInput<Game>> for GameMsg {
+        fn from(value: TimeoutInput<Game>) -> Self {
             Self(value)
         }
     }
 
     #[derive(Debug, Clone)]
-    pub struct GameMsg(TimeoutInput<ComponentKind>);
+    pub struct GameMsg(TimeoutInput<Game>);
     impl GetTopic<TimeoutTopic> for GameMsg {
         fn get_topic(&self) -> TimeoutTopic {
             TimeoutTopic
@@ -412,15 +412,15 @@ mod tests {
         type Topic = TimeoutTopic;
     }
 
-    impl TryInto<TimeoutInput<ComponentKind>> for GameMsg {
+    impl TryInto<TimeoutInput<Game>> for GameMsg {
         type Error = Report<ConversionError>;
 
-        fn try_into(self) -> Result<TimeoutInput<ComponentKind>, Self::Error> {
+        fn try_into(self) -> Result<TimeoutInput<Game>, Self::Error> {
             Ok(self.0)
         }
     }
 
-    impl Retain<ComponentKind> for GameMsg {
+    impl Retain<Game> for GameMsg {
         type Item = Hold<Packet>;
     }
 
@@ -428,7 +428,7 @@ mod tests {
     #[display("{msg}")]
     pub struct Packet {
         msg: u64,
-        sender: StateId<ComponentKind>,
+        sender: StateId<Game>,
         who_holds: WhoHolds,
     }
 
@@ -442,7 +442,7 @@ mod tests {
     // determines whether Ping or Pong will await before packet send
     //
     #[derive(Copy, Clone, PartialEq, Debug)]
-    pub struct WhoHolds(Option<ComponentKind>);
+    pub struct WhoHolds(Option<Game>);
 
     #[derive(Clone, PartialEq, Debug)]
     pub enum MenuInput {
@@ -471,7 +471,7 @@ mod tests {
 
     #[derive(Clone, Debug, derive_more::From)]
     pub enum PingInput {
-        StartSending(StateId<ComponentKind>, WhoHolds),
+        StartSending(StateId<Game>, WhoHolds),
         Returned(Hold<Packet>),
         Packet(Packet),
         #[allow(dead_code)]
@@ -496,42 +496,42 @@ mod tests {
     }
 
     #[derive(Copy, Clone, PartialEq, Debug)]
-    pub enum ComponentState {
+    pub enum GameState {
         Ping(PingState),
         Pong(PongState),
         Menu(MenuState),
     }
 
-    impl State for ComponentState {
+    impl State for GameState {
         fn get_kind(&self) -> &dyn Kind<State = Self> {
             match self {
-                ComponentState::Ping(_) => &ComponentKind::Ping,
-                ComponentState::Pong(_) => &ComponentKind::Pong,
-                ComponentState::Menu(_) => &ComponentKind::Menu,
+                GameState::Ping(_) => &Game::Ping,
+                GameState::Pong(_) => &Game::Pong,
+                GameState::Menu(_) => &Game::Menu,
             }
         }
     }
 
     #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-    pub enum ComponentKind {
+    pub enum Game {
         Ping,
         Pong,
         Menu,
     }
 
-    impl Rex for ComponentKind {
+    impl Rex for Game {
         type Input = Input;
         type Message = GameMsg;
 
         fn state_input(&self, state: <Self as Kind>::State) -> Option<Self::Input> {
-            if *self != ComponentKind::Menu {
+            if *self != Game::Menu {
                 return None;
             }
 
             match state {
-                ComponentState::Ping(PingState::Done) => Some(MenuInput::PingPongComplete),
-                ComponentState::Ping(PingState::Failed) => Some(MenuInput::FailedPing),
-                ComponentState::Pong(PongState::Failed) => Some(MenuInput::FailedPong),
+                GameState::Ping(PingState::Done) => Some(MenuInput::PingPongComplete),
+                GameState::Ping(PingState::Failed) => Some(MenuInput::FailedPing),
+                GameState::Pong(PongState::Failed) => Some(MenuInput::FailedPong),
                 _ => None,
             }
             .map(|i| i.into())
@@ -539,57 +539,58 @@ mod tests {
 
         fn timeout_input(&self, instant: Instant) -> Option<Self::Input> {
             match self {
-                ComponentKind::Ping => Some(PingInput::RecvTimeout(instant).into()),
-                ComponentKind::Pong => Some(PongInput::RecvTimeout(instant).into()),
-                ComponentKind::Menu => None,
+                Game::Ping => Some(PingInput::RecvTimeout(instant).into()),
+                Game::Pong => Some(PongInput::RecvTimeout(instant).into()),
+                Game::Menu => None,
             }
         }
     }
 
-    impl Return for ComponentKind {
+    impl Return for Game {
         fn return_item(&self, item: RetainItem<Self>) -> Option<Self::Input> {
             match self {
-                ComponentKind::Ping => Some(Input::Ping(item.into())),
-                ComponentKind::Pong => Some(Input::Pong(item.into())),
-                ComponentKind::Menu => None,
+                Game::Ping => Some(Input::Ping(item.into())),
+                Game::Pong => Some(Input::Pong(item.into())),
+                Game::Menu => None,
             }
         }
     }
 
-    impl Kind for ComponentKind {
-        type State = ComponentState;
+    impl Kind for Game {
+        type State = GameState;
 
         fn new_state(&self) -> Self::State {
             match self {
-                ComponentKind::Ping => ComponentState::Ping(PingState::default()),
-                ComponentKind::Pong => ComponentState::Pong(PongState::default()),
-                ComponentKind::Menu => ComponentState::Menu(MenuState::default()),
+                Game::Ping => GameState::Ping(PingState::default()),
+                Game::Pong => GameState::Pong(PongState::default()),
+                Game::Menu => GameState::Menu(MenuState::default()),
             }
         }
 
         fn failed_state(&self) -> Self::State {
             match self {
-                ComponentKind::Ping => ComponentState::Ping(PingState::Failed),
-                ComponentKind::Pong => ComponentState::Pong(PongState::Failed),
-                ComponentKind::Menu => ComponentState::Menu(MenuState::Failed),
+                Game::Ping => GameState::Ping(PingState::Failed),
+                Game::Pong => GameState::Pong(PongState::Failed),
+                Game::Menu => GameState::Menu(MenuState::Failed),
             }
         }
 
         fn completed_state(&self) -> Self::State {
             match self {
-                ComponentKind::Ping => ComponentState::Ping(PingState::Done),
-                ComponentKind::Pong => ComponentState::Pong(PongState::Done),
-                ComponentKind::Menu => ComponentState::Menu(MenuState::Done),
+                Game::Ping => GameState::Ping(PingState::Done),
+                Game::Pong => GameState::Pong(PongState::Done),
+                Game::Menu => GameState::Menu(MenuState::Done),
             }
         }
     }
 
     struct MenuStateMachine {
-        failures: Arc<DashMap<StateId<ComponentKind>, MenuInput>>,
+        failures: Arc<DashMap<StateId<Game>, MenuInput>>,
     }
 
-    impl StateMachine<ComponentKind> for MenuStateMachine {
-        fn process(&self, ctx: SmContext<ComponentKind>, id: StateId<ComponentKind>, input: Input) {
+    impl StateMachine<Game> for MenuStateMachine {
+        #[instrument(name = "menu", skip_all)]
+        fn process(&self, ctx: SmContext<Game>, id: StateId<Game>, input: Input) {
             let Input::Menu(input) = input else {
                 error!(input = ?input, "invalid input!");
                 return;
@@ -603,8 +604,8 @@ mod tests {
 
             match input {
                 MenuInput::Play(who_holds) => {
-                    let ping_id = StateId::new_rand(ComponentKind::Ping);
-                    let pong_id = StateId::new_rand(ComponentKind::Pong);
+                    let ping_id = StateId::new_rand(Game::Ping);
+                    let pong_id = StateId::new_rand(Game::Pong);
                     // Menu + Ping + Pong
                     let menu_tree = Node::new(id)
                         .into_insert(Insert {
@@ -647,8 +648,8 @@ mod tests {
             }
         }
 
-        fn get_kind(&self) -> ComponentKind {
-            ComponentKind::Menu
+        fn get_kind(&self) -> Game {
+            Game::Menu
         }
     }
 
@@ -662,8 +663,9 @@ mod tests {
 
     struct PingStateMachine;
 
-    impl StateMachine<ComponentKind> for PingStateMachine {
-        fn process(&self, ctx: SmContext<ComponentKind>, id: StateId<ComponentKind>, input: Input) {
+    impl StateMachine<Game> for PingStateMachine {
+        #[instrument(name = "ping", skip_all)]
+        fn process(&self, ctx: SmContext<Game>, id: StateId<Game>, input: Input) {
             let Input::Ping(input) = input else {
                 error!(?input, "invalid input!");
                 return;
@@ -676,7 +678,7 @@ mod tests {
 
             match input {
                 PingInput::StartSending(pong_id, who_holds) => {
-                    self.update(&ctx, id, ComponentState::Ping(PingState::Sending));
+                    self.update(&ctx, id, GameState::Ping(PingState::Sending));
                     info!(msg = 0, "PINGING");
                     ctx.signal_queue.push_back(Signal {
                         id: pong_id,
@@ -693,41 +695,25 @@ mod tests {
                     self.complete(&ctx, id);
                     self.cancel_timeout(&ctx, id);
                 }
-                PingInput::Packet(Packet {
-                    mut msg,
-                    sender,
-                    who_holds,
-                }) => {
+                PingInput::Packet(mut packet) => {
                     self.set_timeout(&ctx, id, TEST_TIMEOUT);
-                    msg += 5;
-                    let packet = Packet {
-                        msg,
-                        sender: id,
-                        who_holds,
-                    };
+                    packet.msg += 5;
 
-                    // sleep after resetting own timeout
-                    if let WhoHolds(Some(ComponentKind::Ping)) = who_holds {
-                        info!(?msg, who = ?self.get_kind(), "HOLDING");
-                        // refresh timeout halfway through sleep
-                        let half_sleep = Duration::from_millis(msg) / 2;
-                        self.return_in(&ctx, id, Hold(packet), half_sleep);
+                    if let WhoHolds(Some(Game::Ping)) = packet.who_holds {
+                        info!(msg = packet.msg, "HOLDING");
+                        // hold for half theduration of the message
+                        let hold_for = Duration::from_millis(packet.msg);
+                        self.return_in(&ctx, id, Hold(packet), hold_for);
                         return;
                     }
 
-                    info!(?msg, "PINGING");
-                    ctx.signal_queue.push_back(Signal {
-                        id: sender,
-                        input: PongInput::Packet(packet).into(),
-                    });
+                    info!(msg = packet.msg, "PINGING");
+                    return_packet(&ctx, id, packet);
                 }
                 PingInput::Returned(Hold(packet)) => {
-                    info!(msg = packet.msg, "PINGING");
-                    ctx.signal_queue.push_back(Signal {
-                        id: packet.sender,
-                        input: PongInput::Packet(packet).into(),
-                    });
                     self.set_timeout(&ctx, id, TEST_TIMEOUT);
+                    info!(msg = packet.msg, "PINGING");
+                    return_packet(&ctx, id, packet);
                 }
 
                 PingInput::RecvTimeout(_) => {
@@ -736,15 +722,16 @@ mod tests {
             }
         }
 
-        fn get_kind(&self) -> ComponentKind {
-            ComponentKind::Ping
+        fn get_kind(&self) -> Game {
+            Game::Ping
         }
     }
 
     struct PongStateMachine;
 
-    impl StateMachine<ComponentKind> for PongStateMachine {
-        fn process(&self, ctx: SmContext<ComponentKind>, id: StateId<ComponentKind>, input: Input) {
+    impl StateMachine<Game> for PongStateMachine {
+        #[instrument(name = "pong", skip_all)]
+        fn process(&self, ctx: SmContext<Game>, id: StateId<Game>, input: Input) {
             let Input::Pong(input) = input else {
                 error!(?input, "invalid input!");
                 return;
@@ -775,51 +762,54 @@ mod tests {
                         })),
                     });
                 }
-                PongInput::Packet(Packet {
-                    mut msg,
-                    sender,
-                    who_holds,
-                }) => {
+                PongInput::Packet(mut packet) => {
                     self.set_timeout(&ctx, id, TEST_TIMEOUT);
-                    if msg == 0 {
-                        self.update(&ctx, id, ComponentState::Pong(PongState::Responding));
+                    if packet.msg == 0 {
+                        self.update(&ctx, id, GameState::Pong(PongState::Responding));
                     }
-                    msg += 5;
-                    let packet = Packet {
-                        msg,
-                        sender: id,
-                        who_holds,
-                    };
+                    packet.msg += 5;
 
-                    if let WhoHolds(Some(ComponentKind::Pong)) = who_holds {
-                        info!(?msg, who = ?self.get_kind(), "HOLDING");
-                        // refresh timeout halfway through sleep
-                        let hold_for = Duration::from_millis(msg) / 2;
+                    if let WhoHolds(Some(Game::Pong)) = packet.who_holds {
+                        info!(msg = packet.msg, "HOLDING");
+                        // hold for half theduration of the message
+                        let hold_for = Duration::from_millis(packet.msg) / 2;
                         self.return_in(&ctx, id, Hold(packet), hold_for);
+                        return;
                     }
 
-                    info!(?msg, "PONGING");
+                    info!(msg = packet.msg, "PONGING");
+                    let recipient = packet.sender;
+                    packet.sender = id;
                     ctx.signal_queue.push_back(Signal {
-                        id: sender,
+                        id: recipient,
                         input: PingInput::Packet(packet).into(),
                     });
                 }
                 PongInput::Returned(Hold(packet)) => {
-                    info!(msg = packet.msg, "PONGING");
-                    ctx.signal_queue.push_back(Signal {
-                        id: packet.sender,
-                        input: PingInput::Packet(packet).into(),
-                    });
                     self.set_timeout(&ctx, id, TEST_TIMEOUT);
+                    info!(msg = packet.msg, "PONGING");
+                    return_packet(&ctx, id, packet);
                 }
                 PongInput::RecvTimeout(_) => {
                     self.fail(&ctx, id);
                 }
             }
         }
-        fn get_kind(&self) -> ComponentKind {
-            ComponentKind::Pong
+        fn get_kind(&self) -> Game {
+            Game::Pong
         }
+    }
+    fn return_packet(ctx: &SmContext<Game>, id: StateId<Game>, mut packet: Packet) {
+        let recipient = packet.sender;
+        packet.sender = id;
+        ctx.signal_queue.push_back(Signal {
+            id: recipient,
+            input: match *id {
+                Game::Ping => PongInput::Packet(packet).into(),
+                Game::Pong => PingInput::Packet(packet).into(),
+                Game::Menu => unreachable!(),
+            },
+        });
     }
 
     #[tracing_test::traced_test]
@@ -832,7 +822,7 @@ mod tests {
             .with_sm(PongStateMachine)
             .build();
 
-        let menu_id = StateId::new_rand(ComponentKind::Menu);
+        let menu_id = StateId::new_rand(Game::Menu);
         ctx.signal_queue.push_back(Signal {
             id: menu_id,
             input: Input::Menu(MenuInput::Play(WhoHolds(None))),
@@ -844,7 +834,7 @@ mod tests {
         let ping_id = node.children[0].id;
         let pong_id = node.children[1].id;
         assert_eq!(menu_id, node.id);
-        assert_eq!(ComponentState::Menu(MenuState::Done), node.state);
+        assert_eq!(GameState::Menu(MenuState::Done), node.state);
 
         // !!NOTE!! ============================================================
         // we are trying to acquire another lock...
@@ -858,19 +848,19 @@ mod tests {
         let tree = ctx.state_store.get_tree(ping_id).unwrap();
         let node = tree.lock();
         let state = node.get_state(ping_id).unwrap();
-        assert_eq!(ComponentState::Ping(PingState::Done), *state);
+        assert_eq!(GameState::Ping(PingState::Done), *state);
 
         drop(node);
 
         let tree = ctx.state_store.get_tree(pong_id).unwrap();
         let node = tree.lock();
         let state = node.get_state(pong_id).unwrap();
-        assert_eq!(ComponentState::Pong(PongState::Done), *state);
+        assert_eq!(GameState::Pong(PongState::Done), *state);
     }
 
     #[tracing_test::traced_test]
     #[tokio::test]
-    async fn state_machine_timeout() {
+    async fn pong_timeout() {
         let menu_sm = MenuStateMachine::new();
         let menu_failures = menu_sm.failures.clone();
         let ctx = RexBuilder::new()
@@ -881,10 +871,10 @@ mod tests {
             .with_tick_rate(TEST_TICK_RATE / 2)
             .build();
 
-        let menu_id = StateId::new_rand(ComponentKind::Menu);
+        let menu_id = StateId::new_rand(Game::Menu);
         ctx.signal_queue.push_back(Signal {
             id: menu_id,
-            input: Input::Menu(MenuInput::Play(WhoHolds(Some(ComponentKind::Ping)))),
+            input: Input::Menu(MenuInput::Play(WhoHolds(Some(Game::Ping)))),
         });
 
         tokio::time::sleep(TEST_TIMEOUT * 4).await;
@@ -895,9 +885,9 @@ mod tests {
             let ping_node = &node.children[0];
             let pong_node = &node.children[1];
             assert_eq!(menu_id, node.id);
-            assert_eq!(ComponentState::Menu(MenuState::Failed), node.state);
-            assert_eq!(ComponentState::Ping(PingState::Failed), ping_node.state);
-            assert_eq!(ComponentState::Pong(PongState::Failed), pong_node.state);
+            assert_eq!(GameState::Menu(MenuState::Failed), node.state);
+            assert_eq!(GameState::Ping(PingState::Failed), ping_node.state);
+            assert_eq!(GameState::Pong(PongState::Failed), pong_node.state);
 
             // !!NOTE!! ============================================================
             // we are trying to acquire another lock...
@@ -911,12 +901,25 @@ mod tests {
         // Ensure that our Menu failed due to Pong timing out since
         // Ping "slept on" the packet
         assert_eq!(MenuInput::FailedPong, *menu_failures.get(&menu_id).unwrap());
+    }
 
+    #[tracing_test::traced_test]
+    #[tokio::test]
+    async fn ping_timeout() {
         // Now fail due to Ping
-        let menu_id = StateId::new_rand(ComponentKind::Menu);
+        let menu_sm = MenuStateMachine::new();
+        let menu_failures = menu_sm.failures.clone();
+        let ctx = RexBuilder::new()
+            .with_sm(menu_sm)
+            .with_sm(PingStateMachine)
+            .with_sm(PongStateMachine)
+            .with_timeout_manager(TimeoutTopic)
+            .with_tick_rate(TEST_TICK_RATE / 2)
+            .build();
+        let menu_id = StateId::new_rand(Game::Menu);
         ctx.signal_queue.push_back(Signal {
             id: menu_id,
-            input: Input::Menu(MenuInput::Play(WhoHolds(Some(ComponentKind::Pong)))),
+            input: Input::Menu(MenuInput::Play(WhoHolds(Some(Game::Pong)))),
         });
 
         tokio::time::sleep(TEST_TIMEOUT * 4).await;
@@ -926,9 +929,9 @@ mod tests {
         let ping_node = &node.children[0];
         let pong_node = &node.children[1];
         assert_eq!(menu_id, node.id);
-        assert_eq!(ComponentState::Menu(MenuState::Failed), node.state);
-        assert_eq!(ComponentState::Ping(PingState::Failed), ping_node.state);
-        assert_eq!(ComponentState::Pong(PongState::Failed), pong_node.state);
+        assert_eq!(GameState::Menu(MenuState::Failed), node.state);
+        assert_eq!(GameState::Ping(PingState::Failed), ping_node.state);
+        assert_eq!(GameState::Pong(PongState::Failed), pong_node.state);
         // Ensure that our Menu failed due to Ping
         assert_eq!(MenuInput::FailedPing, *menu_failures.get(&menu_id).unwrap());
     }
