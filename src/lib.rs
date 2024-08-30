@@ -106,11 +106,10 @@ pub trait Kind: fmt::Debug + Send {
 /// type hierarchy defined by validly implementing the [`Kind`] and [`Rex`] traits,
 /// double colons`::` directed down and right represent type associations:
 /// ```text
-///              Topic
-///              ::
+///
 /// Kind -> Rex::Message
-/// ::      ::      ::
-/// State   Input   Topic
+///   ::     ::       ::
+///   State  Input    Topic
 /// ```
 pub trait Rex: Kind + HashKind {
     type Input: Send + Sync + 'static + fmt::Debug;
