@@ -3,7 +3,7 @@ use tokio::time::Instant;
 
 use super::{Kind, Rex, State};
 use crate::{
-    ingress::StateRouter,
+    ingress::{Ingress, StateRouter},
     notification::{GetTopic, RexMessage},
     timeout::{NoRetain, Retain, Return, TimeoutInput},
     RexError, StateId,
@@ -138,6 +138,17 @@ impl Kind for TestKind {
         TestState::Completed
     }
 }
+
+impl Ingress for TestKind {
+    type In = InPacket;
+    type Out = OutPacket;
+}
+
+impl From<InPacket> for TestInput {
+    fn from(packet: InPacket) -> Self {
+        Self::Packet(packet)
+    }
+}
 impl Return for TestKind {}
 
 #[derive(Clone, Debug, PartialEq)]
@@ -186,13 +197,6 @@ impl<'a> TryFrom<&'a InPacket> for TestKind {
     type Error = Report<ConversionError>;
     fn try_from(_value: &'a InPacket) -> Result<Self, Self::Error> {
         Ok(TestKind)
-    }
-}
-
-impl TryFrom<InPacket> for TestInput {
-    type Error = Report<ConversionError>;
-    fn try_from(value: InPacket) -> Result<Self, Self::Error> {
-        Ok(Self::Packet(value))
     }
 }
 

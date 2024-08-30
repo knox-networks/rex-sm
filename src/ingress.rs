@@ -68,38 +68,35 @@ where
 }
 
 /// Represents a bidirectional network connection
-pub struct IngressAdapter<K, In, Out>
+pub struct IngressAdapter<K>
 where
-    K: Rex,
-    In: Send + Sync + fmt::Debug,
-    Out: Send + Sync + fmt::Debug,
+    K: Rex + Ingress,
+    K::Input: From<K::In>,
+    K::Message: TryInto<K::Out, Error = Report<ConversionError>>,
 {
-    pub(crate) outbound_tx: UnboundedSender<Out>,
+    pub(crate) outbound_tx: UnboundedSender<K::Out>,
     pub(crate) signal_queue: SignalQueue<K>,
-    pub(crate) router: PacketRouter<K, In>,
-    pub inbound_tx: UnboundedSender<In>,
+    pub(crate) router: PacketRouter<K, K::In>,
+    pub inbound_tx: UnboundedSender<K::In>,
     // `self.inbound_rx.take()` will be used on initialization
-    pub(crate) inbound_rx: Option<UnboundedReceiver<In>>,
+    pub(crate) inbound_rx: Option<UnboundedReceiver<K::In>>,
     pub(crate) topic: <K::Message as RexMessage>::Topic,
 }
 
-impl<K, In, Out> IngressAdapter<K, In, Out>
+impl<K> IngressAdapter<K>
 where
-    K: Rex,
-    for<'a> K: TryFrom<&'a In, Error = Report<ConversionError>>,
-    K::Input: TryFrom<In, Error = Report<ConversionError>>,
-    K::Message: TryInto<Out, Error = Report<ConversionError>>,
-    In: Send + Sync + fmt::Debug + 'static,
-    Out: Send + Sync + fmt::Debug + 'static,
+    K: Rex + Ingress,
+    K::Input: From<K::In>,
+    K::Message: TryInto<K::Out, Error = Report<ConversionError>>,
 {
     #[must_use]
     pub fn new(
         signal_queue: SignalQueue<K>,
-        outbound_tx: UnboundedSender<Out>,
-        state_routers: Vec<BoxedStateRouter<K, In>>,
+        outbound_tx: UnboundedSender<K::Out>,
+        state_routers: Vec<BoxedStateRouter<K, K::In>>,
         topic: impl Into<<K::Message as RexMessage>::Topic>,
     ) -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<In>();
+        let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<K::In>();
 
         Self {
             signal_queue,
@@ -119,9 +116,9 @@ where
     }
 
     async fn process_inbound(
-        router: PacketRouter<K, In>,
+        router: PacketRouter<K, K::In>,
         signal_queue: Arc<StreamableDeque<Signal<K>>>,
-        mut packet_rx: UnboundedReceiver<In>,
+        mut packet_rx: UnboundedReceiver<K::In>,
     ) {
         debug!(target: "state_machine", spawning = "IngressAdapter.packet_tx");
         while let Some(packet) = packet_rx.recv().await {
@@ -146,14 +143,21 @@ where
     }
 }
 
-impl<K, In, Out> NotificationProcessor<K::Message> for IngressAdapter<K, In, Out>
+pub trait Ingress: Rex
 where
-    K: Rex,
-    for<'a> K: TryFrom<&'a In, Error = Report<ConversionError>>,
-    K::Input: TryFrom<In, Error = Report<ConversionError>>,
-    K::Message: TryInto<Out, Error = Report<ConversionError>>,
-    In: Send + Sync + fmt::Debug + 'static,
-    Out: Send + Sync + fmt::Debug + 'static,
+    Self::Input: From<Self::In>,
+    Self::Message: TryInto<Self::Out, Error = Report<ConversionError>>,
+    for<'a> Self: TryFrom<&'a Self::In, Error = Report<ConversionError>>,
+{
+    type In: Send + Sync + fmt::Debug + 'static;
+    type Out: Send + Sync + fmt::Debug + 'static;
+}
+
+impl<K> NotificationProcessor<K::Message> for IngressAdapter<K>
+where
+    K: Rex + Ingress,
+    K::Input: From<K::In>,
+    K::Message: TryInto<K::Out, Error = Report<ConversionError>>,
 {
     fn init(&mut self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
         debug!("calling IngressAdapter::process_inbound");
@@ -203,10 +207,7 @@ mod tests {
         RexBuilder, StateId,
     };
 
-    type TestIngressAdapter = (
-        IngressAdapter<TestKind, InPacket, OutPacket>,
-        UnboundedReceiver<OutPacket>,
-    );
+    type TestIngressAdapter = (IngressAdapter<TestKind>, UnboundedReceiver<OutPacket>);
 
     impl TestDefault for TestIngressAdapter {
         fn test_default() -> Self {
