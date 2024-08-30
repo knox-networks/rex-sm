@@ -421,14 +421,15 @@ mod tests {
     }
 
     impl Retain<ComponentKind> for GameMsg {
-        type Item = Hold;
+        type Item = Hold<Packet>;
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Copy, Clone, Debug, derive_more::Display)]
+    #[display("{msg}")]
     pub struct Packet {
         msg: u64,
         sender: StateId<ComponentKind>,
-        who_sleeps: WhoSleeps,
+        who_holds: WhoHolds,
     }
 
     #[derive(Clone, Debug, derive_more::From)]
@@ -440,12 +441,12 @@ mod tests {
 
     // determines whether Ping or Pong will await before packet send
     //
-    #[derive(Clone, PartialEq, Debug)]
-    pub struct WhoSleeps(Option<ComponentKind>);
+    #[derive(Copy, Clone, PartialEq, Debug)]
+    pub struct WhoHolds(Option<ComponentKind>);
 
     #[derive(Clone, PartialEq, Debug)]
     pub enum MenuInput {
-        Play(WhoSleeps),
+        Play(WhoHolds),
         PingPongComplete,
         FailedPing,
         FailedPong,
@@ -470,8 +471,8 @@ mod tests {
 
     #[derive(Clone, Debug, derive_more::From)]
     pub enum PingInput {
-        StartSending(StateId<ComponentKind>, WhoSleeps),
-        Retained(Hold),
+        StartSending(StateId<ComponentKind>, WhoHolds),
+        Returned(Hold<Packet>),
         Packet(Packet),
         #[allow(dead_code)]
         RecvTimeout(Instant),
@@ -491,7 +492,7 @@ mod tests {
         Packet(Packet),
         #[allow(dead_code)]
         RecvTimeout(Instant),
-        Retained(Hold),
+        Returned(Hold<Packet>),
     }
 
     #[derive(Copy, Clone, PartialEq, Debug)]
@@ -601,7 +602,7 @@ mod tests {
             }
 
             match input {
-                MenuInput::Play(who_sleeps) => {
+                MenuInput::Play(who_holds) => {
                     let ping_id = StateId::new_rand(ComponentKind::Ping);
                     let pong_id = StateId::new_rand(ComponentKind::Pong);
                     // Menu + Ping + Pong
@@ -623,7 +624,7 @@ mod tests {
                     // signal to Ping state machine
                     ctx.signal_queue.push_back(Signal {
                         id: ping_id,
-                        input: Input::Ping(PingInput::StartSending(pong_id, who_sleeps)),
+                        input: Input::Ping(PingInput::StartSending(pong_id, who_holds)),
                     });
                 }
                 MenuInput::PingPongComplete => {
@@ -674,7 +675,7 @@ mod tests {
             }
 
             match input {
-                PingInput::StartSending(pong_id, who_sleeps) => {
+                PingInput::StartSending(pong_id, who_holds) => {
                     self.update(&ctx, id, ComponentState::Ping(PingState::Sending));
                     info!(msg = 0, "PINGING");
                     ctx.signal_queue.push_back(Signal {
@@ -682,7 +683,7 @@ mod tests {
                         input: Input::Pong(PongInput::Packet(Packet {
                             msg: 0,
                             sender: id,
-                            who_sleeps,
+                            who_holds,
                         })),
                     });
                     // TODO let timeout = now + Duration::from_millis(250);
@@ -695,31 +696,37 @@ mod tests {
                 PingInput::Packet(Packet {
                     mut msg,
                     sender,
-                    who_sleeps,
+                    who_holds,
                 }) => {
                     self.set_timeout(&ctx, id, TEST_TIMEOUT);
                     msg += 5;
+                    let packet = Packet {
+                        msg,
+                        sender: id,
+                        who_holds,
+                    };
 
                     // sleep after resetting own timeout
-                    if let WhoSleeps(Some(ComponentKind::Ping)) = who_sleeps {
-                        info!(?msg, who = ?self.get_kind(), "SLEEPING");
+                    if let WhoHolds(Some(ComponentKind::Ping)) = who_holds {
+                        info!(?msg, who = ?self.get_kind(), "HOLDING");
                         // refresh timeout halfway through sleep
                         let half_sleep = Duration::from_millis(msg) / 2;
-                        self.return_in(&ctx, id, Hold(half_sleep), half_sleep);
+                        self.return_in(&ctx, id, Hold(packet), half_sleep);
+                        return;
                     }
 
                     info!(?msg, "PINGING");
                     ctx.signal_queue.push_back(Signal {
                         id: sender,
-                        input: Input::Pong(PongInput::Packet(Packet {
-                            msg,
-                            sender: id,
-                            who_sleeps,
-                        })),
+                        input: PongInput::Packet(packet).into(),
                     });
                 }
-                PingInput::Retained(retained_for) => {
-                    info!(%retained_for);
+                PingInput::Returned(Hold(packet)) => {
+                    info!(msg = packet.msg, "PINGING");
+                    ctx.signal_queue.push_back(Signal {
+                        id: packet.sender,
+                        input: PongInput::Packet(packet).into(),
+                    });
                     self.set_timeout(&ctx, id, TEST_TIMEOUT);
                 }
 
@@ -753,7 +760,7 @@ mod tests {
                     // https://doc.rust-lang.org/book/ch18-03-pattern-syntax.html#-bindings
                     msg: mut msg @ 20..,
                     sender,
-                    who_sleeps,
+                    who_holds,
                 }) => {
                     msg += 5;
                     info!(?msg, "PONGING");
@@ -764,40 +771,45 @@ mod tests {
                         input: Input::Ping(PingInput::Packet(Packet {
                             msg,
                             sender: id,
-                            who_sleeps,
+                            who_holds,
                         })),
                     });
                 }
                 PongInput::Packet(Packet {
                     mut msg,
                     sender,
-                    who_sleeps,
+                    who_holds,
                 }) => {
+                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
                     if msg == 0 {
                         self.update(&ctx, id, ComponentState::Pong(PongState::Responding));
                     }
                     msg += 5;
+                    let packet = Packet {
+                        msg,
+                        sender: id,
+                        who_holds,
+                    };
 
-                    if let WhoSleeps(Some(ComponentKind::Pong)) = who_sleeps {
-                        info!(?msg, who = ?self.get_kind(), "SLEEPING");
+                    if let WhoHolds(Some(ComponentKind::Pong)) = who_holds {
+                        info!(?msg, who = ?self.get_kind(), "HOLDING");
                         // refresh timeout halfway through sleep
-                        let half_sleep = Duration::from_millis(msg) / 2;
-                        self.return_in(&ctx, id, Hold(half_sleep), half_sleep);
+                        let hold_for = Duration::from_millis(msg) / 2;
+                        self.return_in(&ctx, id, Hold(packet), hold_for);
                     }
 
-                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
                     info!(?msg, "PONGING");
                     ctx.signal_queue.push_back(Signal {
                         id: sender,
-                        input: Input::Ping(PingInput::Packet(Packet {
-                            msg,
-                            sender: id,
-                            who_sleeps,
-                        })),
+                        input: PingInput::Packet(packet).into(),
                     });
                 }
-                PongInput::Retained(retained_for) => {
-                    info!(%retained_for);
+                PongInput::Returned(Hold(packet)) => {
+                    info!(msg = packet.msg, "PONGING");
+                    ctx.signal_queue.push_back(Signal {
+                        id: packet.sender,
+                        input: PingInput::Packet(packet).into(),
+                    });
                     self.set_timeout(&ctx, id, TEST_TIMEOUT);
                 }
                 PongInput::RecvTimeout(_) => {
@@ -823,7 +835,7 @@ mod tests {
         let menu_id = StateId::new_rand(ComponentKind::Menu);
         ctx.signal_queue.push_back(Signal {
             id: menu_id,
-            input: Input::Menu(MenuInput::Play(WhoSleeps(None))),
+            input: Input::Menu(MenuInput::Play(WhoHolds(None))),
         });
         tokio::time::sleep(Duration::from_millis(1)).await;
 
@@ -872,7 +884,7 @@ mod tests {
         let menu_id = StateId::new_rand(ComponentKind::Menu);
         ctx.signal_queue.push_back(Signal {
             id: menu_id,
-            input: Input::Menu(MenuInput::Play(WhoSleeps(Some(ComponentKind::Ping)))),
+            input: Input::Menu(MenuInput::Play(WhoHolds(Some(ComponentKind::Ping)))),
         });
 
         tokio::time::sleep(TEST_TIMEOUT * 4).await;
@@ -904,7 +916,7 @@ mod tests {
         let menu_id = StateId::new_rand(ComponentKind::Menu);
         ctx.signal_queue.push_back(Signal {
             id: menu_id,
-            input: Input::Menu(MenuInput::Play(WhoSleeps(Some(ComponentKind::Pong)))),
+            input: Input::Menu(MenuInput::Play(WhoHolds(Some(ComponentKind::Pong)))),
         });
 
         tokio::time::sleep(TEST_TIMEOUT * 4).await;

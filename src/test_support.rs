@@ -1,6 +1,4 @@
-use std::time::Duration;
-
-use bigerror::{attachment::DisplayDuration, error_stack::Report, ConversionError, Reportable};
+use bigerror::{error_stack::Report, ConversionError, Reportable};
 use tokio::time::Instant;
 
 use super::{Kind, Rex, State};
@@ -92,8 +90,7 @@ impl RexMessage for TestMsg {
 }
 
 #[derive(Copy, Clone, Debug, derive_more::Display)]
-#[display("held for {}", DisplayDuration(*_0))]
-pub struct Hold(pub(crate) Duration);
+pub struct Hold<T>(pub(crate) T);
 impl Retain<TestKind> for TestMsg {
     type Item = NoRetain;
 }
