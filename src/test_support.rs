@@ -1,11 +1,13 @@
-use bigerror::{error_stack::Report, ConversionError, Reportable};
+use std::time::Duration;
+
+use bigerror::{attachment::DisplayDuration, error_stack::Report, ConversionError, Reportable};
 use tokio::time::Instant;
 
 use super::{Kind, Rex, State};
 use crate::{
     ingress::StateRouter,
     notification::{GetTopic, RexMessage},
-    timeout::TimeoutInput,
+    timeout::{NoRetain, Retain, Return, TimeoutInput},
     RexError, StateId,
 };
 
@@ -89,6 +91,13 @@ impl RexMessage for TestMsg {
     type Topic = TestTopic;
 }
 
+#[derive(Copy, Clone, Debug, derive_more::Display)]
+#[display("held for {}", DisplayDuration(*_0))]
+pub struct Hold(pub(crate) Duration);
+impl Retain<TestKind> for TestMsg {
+    type Item = NoRetain;
+}
+
 impl GetTopic<TestTopic> for TestMsg {
     fn get_topic(&self) -> TestTopic {
         match self {
@@ -132,6 +141,7 @@ impl Kind for TestKind {
         TestState::Completed
     }
 }
+impl Return for TestKind {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TestInput {

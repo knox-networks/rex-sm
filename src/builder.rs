@@ -10,7 +10,7 @@ use crate::{
     ingress::{BoxedStateRouter, IngressAdapter, PacketRouter},
     manager::BoxedStateMachine,
     notification::NotificationQueue,
-    timeout::{self, TimeoutInput, TimeoutManager},
+    timeout::{self, Retain, Return, TimeoutInput, TimeoutManager, TimeoutOp},
     NotificationManager, NotificationProcessor, Rex, RexMessage, SignalQueue, SmContext,
     StateMachine, StateMachineManager,
 };
@@ -38,16 +38,16 @@ pub struct BuilderContext<K: Rex> {
 }
 
 impl<K: Rex> RexBuilder<K, (), ()> {
-    #[must_use] pub fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self::default()
     }
 }
 
 impl<K, In, Out> RexBuilder<K, In, Out>
 where
-    K: Rex,
-    K::Message: From<TimeoutInput<K>> + TryInto<TimeoutInput<K>>,
-    <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
+    K: Rex + Return,
+    K::Message: Retain<K>,
     In: Send + Sync + std::fmt::Debug,
     Out: Send + Sync + std::fmt::Debug,
     TimeoutManager<K>: NotificationProcessor<K::Message>,
@@ -188,7 +188,7 @@ where
 
 impl<K, In, Out> RexBuilder<K, In, Out>
 where
-    K: Rex,
+    K: Rex + Return,
 
     for<'a> K: TryFrom<&'a In, Error = Report<ConversionError>>,
     In: Send + Sync + std::fmt::Debug + 'static,
@@ -196,8 +196,7 @@ where
 
     K::Input: TryFrom<In, Error = Report<ConversionError>>,
     K::Message: TryInto<Out, Error = Report<ConversionError>>,
-    K::Message: From<TimeoutInput<K>> + TryInto<TimeoutInput<K>>,
-    <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
+    K::Message: Retain<K>,
     TimeoutManager<K>: NotificationProcessor<K::Message>,
 {
     #[must_use]

@@ -1,6 +1,7 @@
 use std::fmt;
 
 use bigerror::reportable;
+use timeout::Return;
 use tokio::time::Instant;
 use tracing::error;
 use uuid::Uuid;
@@ -106,8 +107,8 @@ pub trait Kind: fmt::Debug + Send {
 /// type hierarchy defined by validly implementing the [`Kind`] and [`Rex`] traits,
 /// double colons`::` directed down and right represent type associations:
 /// ```text
-///            Topic
-///            ::
+///              Topic
+///              ::
 /// Kind -> Rex::Message
 /// ::      ::      ::
 /// State   Input   Topic

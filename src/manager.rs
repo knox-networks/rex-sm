@@ -60,7 +60,7 @@ use crate::{
     notification::{Notification, NotificationQueue},
     queue::StreamableDeque,
     storage::{StateStore, Tree},
-    timeout::TimeoutInput,
+    timeout::{Retain, RetainItem, TimeoutInput},
     Kind, Rex, State, StateId,
 };
 
@@ -179,7 +179,8 @@ impl<K> StateMachineManager<K>
 where
     K: Rex,
 {
-    #[must_use] pub fn context(&self) -> SmContext<K> {
+    #[must_use]
+    pub fn context(&self) -> SmContext<K> {
         SmContext {
             signal_queue: self.signal_queue.clone(),
             notification_queue: self.notification_queue.clone(),
@@ -228,7 +229,7 @@ where
                     else {
                         continue;
                     };
-                    sm.process(ctx.clone(), id, input).await;
+                    sm.process(ctx.clone(), id, input);
                 }
             }
             .in_current_span(),
@@ -242,12 +243,11 @@ pub(crate) type BoxedStateMachine<K> = Box<dyn StateMachine<K>>;
 /// A [`StateMachine`] consumes the `input` portion of a [`Signal`] and...
 /// * optionally emits [`Signal`]s - consumed by the [`StateMachineManager`] `signal_queue`
 /// * optionally emits [`Notification`]s  - consumed by the [`NotificationQueue`]
-#[async_trait::async_trait]
 pub trait StateMachine<K>: Send + Sync
 where
     K: Rex,
 {
-    async fn process(&self, ctx: SmContext<K>, id: StateId<K>, input: K::Input);
+    fn process(&self, ctx: SmContext<K>, id: StateId<K>, input: K::Input);
 
     fn get_kind(&self) -> K;
 
@@ -271,6 +271,7 @@ where
         });
     }
 
+    /// Panic: will panic if passed in an id without a previously stored state
     fn update(&self, ctx: &SmContext<K>, id: StateId<K>, state: K::State) {
         let tree = ctx.state_store.get_tree(id).expect("missing id for update");
         let mut guard = tree.lock();
@@ -279,11 +280,10 @@ where
     }
 }
 
-#[async_trait]
 pub trait StateMachineExt<K>: StateMachine<K>
 where
     K: Rex,
-    K::Message: From<TimeoutInput<K>>,
+    K::Message: Retain<K>,
 {
     /// NOTE [`StateMachineExt::new`] is created without a hierarchy
     fn create_tree(&self, ctx: &SmContext<K>, id: StateId<K>) {
@@ -344,6 +344,18 @@ where
             .priority_send(Notification(TimeoutInput::set_timeout(id, duration).into()));
     }
 
+    fn return_in(
+        &self,
+        ctx: &SmContext<K>,
+        id: StateId<K>,
+        item: RetainItem<K>,
+        duration: Duration,
+    ) {
+        ctx.notification_queue.priority_send(Notification(
+            TimeoutInput::retain(id, item, duration).into(),
+        ));
+    }
+
     fn cancel_timeout(&self, ctx: &SmContext<K>, id: StateId<K>) {
         ctx.notification_queue
             .priority_send(Notification(TimeoutInput::cancel_timeout(id).into()));
@@ -361,7 +373,7 @@ impl<K, T> StateMachineExt<K> for T
 where
     T: StateMachine<K>,
     K: Rex,
-    K::Message: From<TimeoutInput<K>>,
+    K::Message: Retain<K>,
 {
 }
 
@@ -379,7 +391,8 @@ mod tests {
         node::{Insert, Node},
         notification::GetTopic,
         storage::StateStore,
-        timeout::{TimeoutTopic, TEST_TICK_RATE, TEST_TIMEOUT},
+        test_support::Hold,
+        timeout::{Retain, Return, TimeoutTopic, TEST_TICK_RATE, TEST_TIMEOUT},
         Rex, RexBuilder, RexMessage,
     };
 
@@ -408,6 +421,10 @@ mod tests {
         }
     }
 
+    impl Retain<ComponentKind> for GameMsg {
+        type Item = Hold;
+    }
+
     #[derive(Clone, Debug)]
     pub struct Packet {
         msg: u64,
@@ -415,7 +432,7 @@ mod tests {
         who_sleeps: WhoSleeps,
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, derive_more::From)]
     pub enum Input {
         Ping(PingInput),
         Pong(PongInput),
@@ -452,9 +469,10 @@ mod tests {
         Failed,
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, derive_more::From)]
     pub enum PingInput {
         StartSending(StateId<ComponentKind>, WhoSleeps),
+        Retained(Hold),
         Packet(Packet),
         #[allow(dead_code)]
         RecvTimeout(Instant),
@@ -469,11 +487,12 @@ mod tests {
         Failed,
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, derive_more::From)]
     pub enum PongInput {
         Packet(Packet),
         #[allow(dead_code)]
         RecvTimeout(Instant),
+        Retained(Hold),
     }
 
     #[derive(Copy, Clone, PartialEq, Debug)]
@@ -510,19 +529,28 @@ mod tests {
             }
 
             match state {
-                ComponentState::Ping(PingState::Done) => {
-                    Some(Input::Menu(MenuInput::PingPongComplete))
-                }
-                ComponentState::Ping(PingState::Failed) => Some(Input::Menu(MenuInput::FailedPing)),
-                ComponentState::Pong(PongState::Failed) => Some(Input::Menu(MenuInput::FailedPong)),
+                ComponentState::Ping(PingState::Done) => Some(MenuInput::PingPongComplete),
+                ComponentState::Ping(PingState::Failed) => Some(MenuInput::FailedPing),
+                ComponentState::Pong(PongState::Failed) => Some(MenuInput::FailedPong),
                 _ => None,
             }
+            .map(|i| i.into())
         }
 
-        fn timeout_input(&self, instant: tokio::time::Instant) -> Option<Self::Input> {
+        fn timeout_input(&self, instant: Instant) -> Option<Self::Input> {
             match self {
-                ComponentKind::Ping => Some(Input::Ping(PingInput::RecvTimeout(instant))),
-                ComponentKind::Pong => Some(Input::Pong(PongInput::RecvTimeout(instant))),
+                ComponentKind::Ping => Some(PingInput::RecvTimeout(instant).into()),
+                ComponentKind::Pong => Some(PongInput::RecvTimeout(instant).into()),
+                ComponentKind::Menu => None,
+            }
+        }
+    }
+
+    impl Return for ComponentKind {
+        fn return_item(&self, item: RetainItem<Self>) -> Option<Self::Input> {
+            match self {
+                ComponentKind::Ping => Some(Input::Ping(item.into())),
+                ComponentKind::Pong => Some(Input::Pong(item.into())),
                 ComponentKind::Menu => None,
             }
         }
@@ -560,14 +588,8 @@ mod tests {
         failures: Arc<DashMap<StateId<ComponentKind>, MenuInput>>,
     }
 
-    #[async_trait::async_trait]
     impl StateMachine<ComponentKind> for MenuStateMachine {
-        async fn process(
-            &self,
-            ctx: SmContext<ComponentKind>,
-            id: StateId<ComponentKind>,
-            input: Input,
-        ) {
+        fn process(&self, ctx: SmContext<ComponentKind>, id: StateId<ComponentKind>, input: Input) {
             let Input::Menu(input) = input else {
                 error!(input = ?input, "invalid input!");
                 return;
@@ -640,14 +662,8 @@ mod tests {
 
     struct PingStateMachine;
 
-    #[async_trait::async_trait]
     impl StateMachine<ComponentKind> for PingStateMachine {
-        async fn process(
-            &self,
-            ctx: SmContext<ComponentKind>,
-            id: StateId<ComponentKind>,
-            input: Input,
-        ) {
+        fn process(&self, ctx: SmContext<ComponentKind>, id: StateId<ComponentKind>, input: Input) {
             let Input::Ping(input) = input else {
                 error!(?input, "invalid input!");
                 return;
@@ -677,14 +693,11 @@ mod tests {
                     self.complete(&ctx, id);
                     self.cancel_timeout(&ctx, id);
                 }
-
                 PingInput::Packet(Packet {
                     mut msg,
                     sender,
                     who_sleeps,
                 }) => {
-                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
-                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
                     self.set_timeout(&ctx, id, TEST_TIMEOUT);
                     msg += 5;
 
@@ -693,9 +706,7 @@ mod tests {
                         info!(?msg, who = ?self.get_kind(), "SLEEPING");
                         // refresh timeout halfway through sleep
                         let half_sleep = Duration::from_millis(msg) / 2;
-                        tokio::time::sleep(half_sleep).await;
-                        self.set_timeout(&ctx, id, TEST_TIMEOUT);
-                        tokio::time::sleep(half_sleep).await;
+                        self.return_in(&ctx, id, Hold(half_sleep), half_sleep);
                     }
 
                     info!(?msg, "PINGING");
@@ -708,6 +719,11 @@ mod tests {
                         })),
                     });
                 }
+                PingInput::Retained(retained_for) => {
+                    info!(%retained_for);
+                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
+                }
+
                 PingInput::RecvTimeout(_) => {
                     self.fail(&ctx, id);
                 }
@@ -721,14 +737,8 @@ mod tests {
 
     struct PongStateMachine;
 
-    #[async_trait::async_trait]
     impl StateMachine<ComponentKind> for PongStateMachine {
-        async fn process(
-            &self,
-            ctx: SmContext<ComponentKind>,
-            id: StateId<ComponentKind>,
-            input: Input,
-        ) {
+        fn process(&self, ctx: SmContext<ComponentKind>, id: StateId<ComponentKind>, input: Input) {
             let Input::Pong(input) = input else {
                 error!(?input, "invalid input!");
                 return;
@@ -773,9 +783,7 @@ mod tests {
                         info!(?msg, who = ?self.get_kind(), "SLEEPING");
                         // refresh timeout halfway through sleep
                         let half_sleep = Duration::from_millis(msg) / 2;
-                        tokio::time::sleep(half_sleep).await;
-                        self.set_timeout(&ctx, id, TEST_TIMEOUT);
-                        tokio::time::sleep(half_sleep).await;
+                        self.return_in(&ctx, id, Hold(half_sleep), half_sleep);
                     }
 
                     self.set_timeout(&ctx, id, TEST_TIMEOUT);
@@ -789,6 +797,10 @@ mod tests {
                         })),
                     });
                 }
+                PongInput::Retained(retained_for) => {
+                    info!(%retained_for);
+                    self.set_timeout(&ctx, id, TEST_TIMEOUT);
+                }
                 PongInput::RecvTimeout(_) => {
                     self.fail(&ctx, id);
                 }
@@ -799,8 +811,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
     #[tracing_test::traced_test]
+    #[tokio::test]
     async fn state_machine() {
         // This test does not initialize the NotificationManager
         let ctx = RexBuilder::new()
@@ -845,8 +857,8 @@ mod tests {
         assert_eq!(ComponentState::Pong(PongState::Done), *state);
     }
 
-    #[tokio::test]
     #[tracing_test::traced_test]
+    #[tokio::test]
     async fn state_machine_timeout() {
         let menu_sm = MenuStateMachine::new();
         let menu_failures = menu_sm.failures.clone();
