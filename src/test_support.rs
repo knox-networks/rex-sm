@@ -144,9 +144,11 @@ impl Ingress for TestKind {
     type Out = OutPacket;
 }
 
-impl From<InPacket> for TestInput {
-    fn from(packet: InPacket) -> Self {
-        Self::Packet(packet)
+impl TryFrom<InPacket> for TestInput {
+    type Error = Report<ConversionError>;
+
+    fn try_from(packet: InPacket) -> Result<Self, Self::Error> {
+        Ok(Self::Packet(packet))
     }
 }
 impl Return for TestKind {}

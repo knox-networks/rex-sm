@@ -71,7 +71,7 @@ where
 pub struct IngressAdapter<K>
 where
     K: Rex + Ingress,
-    K::Input: From<K::In>,
+    K::Input: TryFrom<K::In, Error = Report<ConversionError>>,
     K::Message: TryInto<K::Out, Error = Report<ConversionError>>,
 {
     pub(crate) outbound_tx: UnboundedSender<K::Out>,
@@ -86,7 +86,7 @@ where
 impl<K> IngressAdapter<K>
 where
     K: Rex + Ingress,
-    K::Input: From<K::In>,
+    K::Input: TryFrom<K::In, Error = Report<ConversionError>>,
     K::Message: TryInto<K::Out, Error = Report<ConversionError>>,
 {
     #[must_use]
@@ -145,7 +145,7 @@ where
 
 pub trait Ingress: Rex
 where
-    Self::Input: From<Self::In>,
+    Self::Input: TryFrom<Self::In, Error = Report<ConversionError>>,
     Self::Message: TryInto<Self::Out, Error = Report<ConversionError>>,
     for<'a> Self: TryFrom<&'a Self::In, Error = Report<ConversionError>>,
 {
@@ -156,7 +156,7 @@ where
 impl<K> NotificationProcessor<K::Message> for IngressAdapter<K>
 where
     K: Rex + Ingress,
-    K::Input: From<K::In>,
+    K::Input: TryFrom<K::In, Error = Report<ConversionError>>,
     K::Message: TryInto<K::Out, Error = Report<ConversionError>>,
 {
     fn init(&mut self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {

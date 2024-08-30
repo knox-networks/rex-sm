@@ -162,7 +162,7 @@ where
     K: Rex + Return + Ingress,
 
     K::Message: Retain<K> + TryInto<K::Out, Error = Report<ConversionError>>,
-    K::Input: From<K::In>,
+    K::Input: TryFrom<K::In, Error = Report<ConversionError>>,
     TimeoutManager<K>: NotificationProcessor<K::Message>,
 {
     #[must_use]
