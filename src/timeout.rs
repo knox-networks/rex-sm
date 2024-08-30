@@ -160,7 +160,7 @@ pub trait Return: Rex
 where
     Self::Message: Retain<Self>,
 {
-    fn return_item(&self, item: RetainItem<Self>) -> Option<Self::Input> {
+    fn return_item(&self, _item: RetainItem<Self>) -> Option<Self::Input> {
         None
     }
 }
@@ -389,7 +389,7 @@ where
 
 impl<K> NotificationProcessor<K::Message> for TimeoutManager<K>
 where
-    K: Rex,
+    K: Rex + Return,
     K::Message: Retain<K>,
 {
     fn init(&mut self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
