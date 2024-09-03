@@ -18,8 +18,6 @@ use crate::{
 pub struct RexBuilder<K, In = (), Out = ()>
 where
     K: Rex,
-    In: Send + Sync + std::fmt::Debug,
-    Out: Send + Sync + std::fmt::Debug,
 {
     signal_queue: SignalQueue<K>,
     notification_queue: NotificationQueue<K::Message>,
@@ -48,8 +46,6 @@ impl<K, In, Out> RexBuilder<K, In, Out>
 where
     K: Rex + Timeout,
     K::Message: TimeoutMessage<K>,
-    In: Send + Sync + std::fmt::Debug,
-    Out: Send + Sync + std::fmt::Debug,
     TimeoutManager<K>: NotificationProcessor<K::Message>,
 {
     pub fn ctx(&self) -> BuilderContext<K> {
@@ -160,15 +156,12 @@ where
 impl<K> RexBuilder<K, K::In, K::Out>
 where
     K: Rex + Timeout + Ingress,
-
     K::Message: TimeoutMessage<K> + TryInto<K::Out, Error = Report<ConversionError>>,
     K::Input: TryFrom<K::In, Error = Report<ConversionError>>,
     TimeoutManager<K>: NotificationProcessor<K::Message>,
 {
     #[must_use]
-    pub fn new_connected(
-        outbound_tx: UnboundedSender<K::Out>,
-    ) -> (UnboundedSender<K::In>, RexBuilder<K, K::In, K::Out>) {
+    pub fn new_connected(outbound_tx: UnboundedSender<K::Out>) -> (UnboundedSender<K::In>, Self) {
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel::<K::In>();
         (
             inbound_tx.clone(),
@@ -219,8 +212,6 @@ where
 impl<K, In, Out> Default for RexBuilder<K, In, Out>
 where
     K: Rex,
-    In: Send + Sync + std::fmt::Debug,
-    Out: Send + Sync + std::fmt::Debug,
 {
     fn default() -> Self {
         Self {
