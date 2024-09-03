@@ -5,7 +5,7 @@ use super::{Kind, Rex, State};
 use crate::{
     ingress::{Ingress, StateRouter},
     notification::{GetTopic, RexMessage},
-    timeout::{NoRetain, Retain, Return, TimeoutInput},
+    timeout::{NoRetain, Timeout, TimeoutInput, TimeoutMessage},
     RexError, StateId,
 };
 
@@ -91,7 +91,7 @@ impl RexMessage for TestMsg {
 
 #[derive(Copy, Clone, Debug, derive_more::Display)]
 pub struct Hold<T>(pub(crate) T);
-impl Retain<TestKind> for TestMsg {
+impl TimeoutMessage<TestKind> for TestMsg {
     type Item = NoRetain;
 }
 
@@ -151,7 +151,7 @@ impl TryFrom<InPacket> for TestInput {
         Ok(Self::Packet(packet))
     }
 }
-impl Return for TestKind {}
+impl Timeout for TestKind {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TestInput {

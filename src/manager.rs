@@ -59,7 +59,7 @@ use crate::{
     notification::{Notification, NotificationQueue},
     queue::StreamableDeque,
     storage::{StateStore, Tree},
-    timeout::{Retain, RetainItem, TimeoutInput},
+    timeout::{RetainItem, TimeoutInput, TimeoutMessage},
     Kind, Rex, State, StateId,
 };
 
@@ -126,20 +126,14 @@ where
 
 /// Store the injectable dependencies provided by the [`StateMachineManager`]
 /// to a given state machine processor.
-pub struct SmContext<K>
-where
-    K: Rex,
-{
+pub struct SmContext<K: Rex> {
     pub signal_queue: SignalQueue<K>,
     pub notification_queue: NotificationQueue<K::Message>,
     pub state_store: Arc<StateStore<StateId<K>, K::State>>,
     pub id: StateId<K>,
 }
 
-impl<K> SmContext<K>
-where
-    K: Rex,
-{
+impl<K: Rex> SmContext<K> {
     pub fn notify(&self, notification: Notification<K::Message>) {
         self.notification_queue.send(notification);
     }
@@ -150,17 +144,14 @@ where
         guard.get_state(self.id).copied()
     }
 
-    fn get_tree(&self) -> Option<Tree<K>> {
+    pub fn get_tree(&self) -> Option<Tree<K>> {
         self.state_store.get_tree(self.id)
     }
     pub fn has_state(&self) -> bool {
         self.state_store.get_tree(self.id).is_some()
     }
 }
-impl<K> Clone for SmContext<K>
-where
-    K: Rex,
-{
+impl<K: Rex> Clone for SmContext<K> {
     fn clone(&self) -> Self {
         Self {
             signal_queue: self.signal_queue.clone(),
@@ -171,12 +162,17 @@ where
     }
 }
 
+impl<K: Rex> std::ops::Deref for SmContext<K> {
+    type Target = StateId<K>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.id
+    }
+}
+
 /// Manages the [`Signal`] scope of various [`State`]s and [`StateMachine`]s bounded by
 /// a [`Kind`] enumerable
-pub struct StateMachineManager<K>
-where
-    K: Rex,
-{
+pub struct StateMachineManager<K: Rex> {
     signal_queue: SignalQueue<K>,
     notification_queue: NotificationQueue<K::Message>,
     state_machines: Arc<HashMap<K, BoxedStateMachine<K>>>,
@@ -199,10 +195,7 @@ impl<K: Rex> EmptyContext<K> {
     }
 }
 
-impl<K> StateMachineManager<K>
-where
-    K: Rex,
-{
+impl<K: Rex> StateMachineManager<K> {
     #[must_use]
     pub fn ctx_builder(&self) -> EmptyContext<K> {
         EmptyContext {
@@ -299,7 +292,7 @@ where
 pub trait StateMachineExt<K>: StateMachine<K>
 where
     K: Rex,
-    K::Message: Retain<K>,
+    K::Message: TimeoutMessage<K>,
 {
     /// NOTE [`StateMachineExt::new`] is created without a hierarchy
     fn create_tree(&self, ctx: &SmContext<K>) {
@@ -379,7 +372,7 @@ impl<K, T> StateMachineExt<K> for T
 where
     T: StateMachine<K>,
     K: Rex,
-    K::Message: Retain<K>,
+    K::Message: TimeoutMessage<K>,
 {
 }
 
@@ -398,7 +391,7 @@ mod tests {
         notification::GetTopic,
         storage::StateStore,
         test_support::Hold,
-        timeout::{Retain, Return, TimeoutTopic, TEST_TICK_RATE, TEST_TIMEOUT},
+        timeout::{Timeout, TimeoutMessage, TimeoutTopic, TEST_TICK_RATE, TEST_TIMEOUT},
         Rex, RexBuilder, RexMessage,
     };
 
@@ -427,7 +420,7 @@ mod tests {
         }
     }
 
-    impl Retain<Game> for GameMsg {
+    impl TimeoutMessage<Game> for GameMsg {
         type Item = Hold<Packet>;
     }
 
@@ -553,7 +546,7 @@ mod tests {
         }
     }
 
-    impl Return for Game {
+    impl Timeout for Game {
         fn return_item(&self, item: RetainItem<Self>) -> Option<Self::Input> {
             match self {
                 Game::Ping => Some(Input::Ping(item.into())),

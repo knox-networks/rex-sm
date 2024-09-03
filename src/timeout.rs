@@ -62,7 +62,7 @@ fn hms_string(duration: Duration) -> String {
 struct TimeoutLedger<K>
 where
     K: Kind + Rex,
-    K::Message: Retain<K>,
+    K::Message: TimeoutMessage<K>,
 {
     timers: BTreeMap<Instant, HashSet<StateId<K>>>,
     ids: HashMap<StateId<K>, Instant>,
@@ -73,7 +73,7 @@ type RetainPair<K> = (StateId<K>, RetainItem<K>);
 impl<K> TimeoutLedger<K>
 where
     K: Rex + HashKind + Copy,
-    K::Message: Retain<K>,
+    K::Message: TimeoutMessage<K>,
 {
     fn new() -> Self {
         Self {
@@ -147,7 +147,7 @@ where
     }
 }
 
-pub trait Retain<K: Rex>:
+pub trait TimeoutMessage<K: Rex>:
     std::fmt::Debug
     + RexMessage
     + From<UnaryRequest<K, Operation<Self::Item>>>
@@ -156,9 +156,9 @@ pub trait Retain<K: Rex>:
     type Item: Copy + Send + std::fmt::Debug;
 }
 
-pub trait Return: Rex
+pub trait Timeout: Rex
 where
-    Self::Message: Retain<Self>,
+    Self::Message: TimeoutMessage<Self>,
 {
     fn return_item(&self, _item: RetainItem<Self>) -> Option<Self::Input> {
         None
@@ -199,13 +199,13 @@ impl<T> Operation<T> {
 }
 
 pub type TimeoutInput<K> = UnaryRequest<K, TimeoutOp<K>>;
-pub type TimeoutOp<K> = Operation<<<K as Rex>::Message as Retain<K>>::Item>;
-pub type RetainItem<K> = <<K as Rex>::Message as Retain<K>>::Item;
+pub type TimeoutOp<K> = Operation<<<K as Rex>::Message as TimeoutMessage<K>>::Item>;
+pub type RetainItem<K> = <<K as Rex>::Message as TimeoutMessage<K>>::Item;
 
 impl<K> UnaryRequest<K, TimeoutOp<K>>
 where
     K: Rex,
-    K::Message: Retain<K>,
+    K::Message: TimeoutMessage<K>,
 {
     #[cfg(test)]
     pub(crate) fn set_timeout_millis(id: StateId<K>, millis: u64) -> Self {
@@ -251,7 +251,7 @@ where
 pub struct TimeoutManager<K>
 where
     K: Rex,
-    K::Message: Retain<K>,
+    K::Message: TimeoutMessage<K>,
 {
     // the interval at which  the TimeoutLedger checks for timeouts
     tick_rate: Duration,
@@ -263,8 +263,8 @@ where
 
 impl<K> TimeoutManager<K>
 where
-    K: Rex + Return,
-    K::Message: Retain<K>,
+    K: Rex + Timeout,
+    K::Message: TimeoutMessage<K>,
 {
     #[must_use]
     pub fn new(
@@ -385,8 +385,8 @@ where
 
 impl<K> NotificationProcessor<K::Message> for TimeoutManager<K>
 where
-    K: Rex + Return,
-    K::Message: Retain<K>,
+    K: Rex + Timeout,
+    K::Message: TimeoutMessage<K>,
 {
     fn init(&mut self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
         self.init_inner_with_handle(join_set)

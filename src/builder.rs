@@ -10,7 +10,7 @@ use crate::{
     ingress::{BoxedStateRouter, Ingress, IngressAdapter, PacketRouter},
     manager::{BoxedStateMachine, EmptyContext},
     notification::NotificationQueue,
-    timeout::{self, Retain, Return, TimeoutManager},
+    timeout::{self, Timeout, TimeoutManager, TimeoutMessage},
     NotificationManager, NotificationProcessor, Rex, RexMessage, SignalQueue, StateMachine,
     StateMachineManager,
 };
@@ -46,8 +46,8 @@ impl<K: Rex> RexBuilder<K, (), ()> {
 
 impl<K, In, Out> RexBuilder<K, In, Out>
 where
-    K: Rex + Return,
-    K::Message: Retain<K>,
+    K: Rex + Timeout,
+    K::Message: TimeoutMessage<K>,
     In: Send + Sync + std::fmt::Debug,
     Out: Send + Sync + std::fmt::Debug,
     TimeoutManager<K>: NotificationProcessor<K::Message>,
@@ -159,9 +159,9 @@ where
 
 impl<K> RexBuilder<K, K::In, K::Out>
 where
-    K: Rex + Return + Ingress,
+    K: Rex + Timeout + Ingress,
 
-    K::Message: Retain<K> + TryInto<K::Out, Error = Report<ConversionError>>,
+    K::Message: TimeoutMessage<K> + TryInto<K::Out, Error = Report<ConversionError>>,
     K::Input: TryFrom<K::In, Error = Report<ConversionError>>,
     TimeoutManager<K>: NotificationProcessor<K::Message>,
 {

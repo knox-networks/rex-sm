@@ -26,6 +26,7 @@ pub use notification::{
     GetTopic, Notification, NotificationManager, NotificationProcessor, NotificationQueue,
     Operation, Request, RequestInner, RexMessage, RexTopic, Subscriber, UnaryRequest,
 };
+pub use timeout::Timeout;
 
 /// A trait for types representing state machine lifecycles. These types should be field-less
 /// enumerations or enumerations whose variants only contain field-less enumerations; note that
