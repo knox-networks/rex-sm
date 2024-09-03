@@ -150,6 +150,13 @@ impl<K: Rex> SmContext<K> {
     pub fn has_state(&self) -> bool {
         self.state_store.get_tree(self.id).is_some()
     }
+
+    pub fn get_parent_id(&self) -> Option<StateId<K>> {
+        self.get_tree().and_then(|tree| {
+            let guard = tree.lock();
+            guard.get_parent_id(self.id)
+        })
+    }
 }
 impl<K: Rex> Clone for SmContext<K> {
     fn clone(&self) -> Self {
@@ -358,13 +365,6 @@ where
     fn cancel_timeout(&self, ctx: &SmContext<K>) {
         ctx.notification_queue
             .priority_send(Notification(TimeoutInput::cancel_timeout(ctx.id).into()));
-    }
-
-    fn get_parent_id(&self, ctx: &SmContext<K>) -> Option<StateId<K>> {
-        ctx.get_tree().and_then(|tree| {
-            let guard = tree.lock();
-            guard.get_parent_id(ctx.id)
-        })
     }
 }
 
