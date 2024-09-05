@@ -365,7 +365,6 @@ where
                         .flat_map(IntoIterator::into_iter)
                         .collect::<Vec<_>>()
                     {
-                        // let
                         if let Some(input) = id.return_item(item) {
                             // caveat with this push_front setup is
                             // that later timeouts will be on top of the stack
