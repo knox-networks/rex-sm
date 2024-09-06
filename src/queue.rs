@@ -85,7 +85,8 @@ impl<T> Default for StreamableDeque<T> {
 }
 
 impl<T> StreamableDeque<T> {
-    #[must_use] pub fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self::default()
     }
 

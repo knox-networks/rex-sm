@@ -1,6 +1,6 @@
 [package]
 name = "rex-sm"
-version = "0.5.3"
+version = "0.6.0"
 edition = "2021"
 description = "Hierarchical state machine"
 license = "MIT"
@@ -14,13 +14,16 @@ async-trait = "0.1"
 bigerror = ">=0.8"
 bs58 = "0.5.1"
 dashmap = "5"
+derive_more = { version = "1", features = ["display"] }
 futures = "0.3"
 parking_lot = "0.12"
 thiserror = "1"
 tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 tokio-stream = "0.1"
 tracing = "0.1"
-tracing-test = "0.2"
 uuid = { version = "1", features = ["v4"] }
 # cargo add async-trait dashmap bigerror futures thiserror tokio-stream tracing tracing-test uuid
 # cargo add tokio --features sync,time
+[dev-dependencies]
+tracing-test = "0.2"
+derive_more = { version = "1", features = ["display", "try_into", "try_from", "from"] }

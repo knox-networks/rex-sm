@@ -26,6 +26,7 @@ pub use notification::{
     GetTopic, Notification, NotificationManager, NotificationProcessor, NotificationQueue,
     Operation, Request, RequestInner, RexMessage, RexTopic, Subscriber, UnaryRequest,
 };
+pub use timeout::Timeout;
 
 /// A trait for types representing state machine lifecycles. These types should be field-less
 /// enumerations or enumerations whose variants only contain field-less enumerations; note that
@@ -106,11 +107,10 @@ pub trait Kind: fmt::Debug + Send {
 /// type hierarchy defined by validly implementing the [`Kind`] and [`Rex`] traits,
 /// double colons`::` directed down and right represent type associations:
 /// ```text
-///            Topic
-///            ::
+///
 /// Kind -> Rex::Message
-/// ::      ::      ::
-/// State   Input   Topic
+///   ::     ::       ::
+///   State  Input    Topic
 /// ```
 pub trait Rex: Kind + HashKind {
     type Input: Send + Sync + 'static + fmt::Debug;
@@ -147,7 +147,9 @@ where
             f,
             "{:?}<{}>",
             self.kind,
-            bs58::encode(self.uuid).into_string()
+            self.is_nil()
+                .then(|| bs58::encode(self.uuid).into_string())
+                .unwrap_or_else(|| "NIL".to_string())
         )
     }
 }
@@ -159,6 +161,13 @@ impl<K: Kind> StateId<K> {
 
     pub fn new_rand(kind: K) -> Self {
         Self::new(kind, Uuid::new_v4())
+    }
+
+    pub fn nil(kind: K) -> Self {
+        Self::new(kind, Uuid::nil())
+    }
+    pub fn is_nil(&self) -> bool {
+        self.uuid == Uuid::nil()
     }
     // for testing purposes, easily distinguish UUIDs
     // by numerical value

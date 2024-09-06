@@ -3,9 +3,9 @@ use tokio::time::Instant;
 
 use super::{Kind, Rex, State};
 use crate::{
-    ingress::StateRouter,
+    ingress::{Ingress, StateRouter},
     notification::{GetTopic, RexMessage},
-    timeout::TimeoutInput,
+    timeout::{NoRetain, Timeout, TimeoutInput, TimeoutMessage},
     RexError, StateId,
 };
 
@@ -89,6 +89,12 @@ impl RexMessage for TestMsg {
     type Topic = TestTopic;
 }
 
+#[derive(Copy, Clone, Debug, derive_more::Display)]
+pub struct Hold<T>(pub(crate) T);
+impl TimeoutMessage<TestKind> for TestMsg {
+    type Item = NoRetain;
+}
+
 impl GetTopic<TestTopic> for TestMsg {
     fn get_topic(&self) -> TestTopic {
         match self {
@@ -132,6 +138,20 @@ impl Kind for TestKind {
         TestState::Completed
     }
 }
+
+impl Ingress for TestKind {
+    type In = InPacket;
+    type Out = OutPacket;
+}
+
+impl TryFrom<InPacket> for TestInput {
+    type Error = Report<ConversionError>;
+
+    fn try_from(packet: InPacket) -> Result<Self, Self::Error> {
+        Ok(Self::Packet(packet))
+    }
+}
+impl Timeout for TestKind {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TestInput {
@@ -179,13 +199,6 @@ impl<'a> TryFrom<&'a InPacket> for TestKind {
     type Error = Report<ConversionError>;
     fn try_from(_value: &'a InPacket) -> Result<Self, Self::Error> {
         Ok(TestKind)
-    }
-}
-
-impl TryFrom<InPacket> for TestInput {
-    type Error = Report<ConversionError>;
-    fn try_from(value: InPacket) -> Result<Self, Self::Error> {
-        Ok(Self::Packet(value))
     }
 }
 

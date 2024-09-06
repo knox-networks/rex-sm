@@ -19,38 +19,6 @@ where
     type Topic: RexTopic;
 }
 
-// TODO add #[from_inner] attribute macro
-#[macro_export]
-macro_rules! from_inner {
-    ($($msg:ident::$variant:ident($inner:path))*) => {
-        $(
-            impl From<$inner> for $msg {
-                fn from(inner: $inner) -> Self {
-                    $msg::$variant(inner)
-                }
-            }
-        )*
-    };
-}
-
-pub trait ToNotification<M>
-where
-    M: RexMessage,
-{
-    fn notification(self) -> Notification<M>;
-}
-
-impl<T, M> ToNotification<M> for T
-where
-    T: Into<M>,
-    M: RexMessage,
-{
-    fn notification(self) -> Notification<M> {
-        let msg: M = self.into();
-        Notification(msg)
-    }
-}
-
 /// Used to derive a marker used to route [`Notification`]s
 /// to [`NotificationProcessor`]s
 pub trait GetTopic<T: RexTopic>: fmt::Debug {
@@ -93,7 +61,8 @@ where
 pub struct NotificationQueue<M: RexMessage>(pub(crate) Arc<StreamableDeque<Notification<M>>>);
 
 impl<M: RexMessage> NotificationQueue<M> {
-    #[must_use] pub fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self(Arc::new(StreamableDeque::new()))
     }
     pub fn send(&self, notif: Notification<M>) {
@@ -104,7 +73,8 @@ impl<M: RexMessage> NotificationQueue<M> {
         self.0.push_front(notif);
     }
 
-    #[must_use] pub fn stream(&self) -> StreamReceiver<Notification<M>> {
+    #[must_use]
+    pub fn stream(&self) -> StreamReceiver<Notification<M>> {
         self.0.stream()
     }
 }

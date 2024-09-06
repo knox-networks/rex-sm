@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use bigerror::attachment::DisplayDuration;
+use bigerror::{attachment::DisplayDuration, ConversionError, Report};
 use parking_lot::Mutex;
 use tokio::{
     sync::{mpsc, mpsc::UnboundedSender},
@@ -19,14 +19,9 @@ use tracing::{debug, error, instrument, warn, Instrument};
 
 use crate::{
     manager::{HashKind, Signal, SignalQueue},
-    notification,
     notification::{Notification, NotificationProcessor, RexMessage, UnaryRequest},
     Kind, Rex, StateId,
 };
-
-pub trait TimeoutMessage<K: Rex>: RexMessage + From<UnaryRequest<K, Self::Op>> {
-    type Op: notification::Operation;
-}
 
 pub const DEFAULT_TICK_RATE: Duration = Duration::from_millis(5);
 const SHORT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -66,27 +61,29 @@ fn hms_string(duration: Duration) -> String {
 #[derive(Debug)]
 struct TimeoutLedger<K>
 where
-    K: Kind,
+    K: Kind + Rex,
+    K::Message: TimeoutMessage<K>,
 {
     timers: BTreeMap<Instant, HashSet<StateId<K>>>,
     ids: HashMap<StateId<K>, Instant>,
+    retainer: BTreeMap<Instant, Vec<RetainPair<K>>>,
 }
+type RetainPair<K> = (StateId<K>, RetainItem<K>);
 
 impl<K> TimeoutLedger<K>
 where
-    K: HashKind + Copy,
+    K: Rex + HashKind + Copy,
+    K::Message: TimeoutMessage<K>,
 {
     fn new() -> Self {
         Self {
             timers: BTreeMap::new(),
             ids: HashMap::new(),
+            retainer: BTreeMap::new(),
         }
     }
 
-    // set timeout for a given instant and associate it with a given id
-    // remove old instants associated with the same id if they exist
-    #[instrument(skip_all, fields(%id))]
-    fn set_timeout(&mut self, id: StateId<K>, instant: Instant) {
+    fn lint_instant(instant: Instant) {
         let now = Instant::now();
         if instant < now {
             error!("requested timeout is in the past");
@@ -97,6 +94,19 @@ where
         } else {
             debug!(duration = %DisplayDuration(instant - now), "setting timeout");
         }
+    }
+
+    #[instrument(skip_all, fields(%id))]
+    fn retain(&mut self, id: StateId<K>, instant: Instant, item: RetainItem<K>) {
+        Self::lint_instant(instant);
+        self.retainer.entry(instant).or_default().push((id, item));
+    }
+
+    // set timeout for a given instant and associate it with a given id
+    // remove old instants associated with the same id if they exist
+    #[instrument(skip_all, fields(%id))]
+    fn set_timeout(&mut self, id: StateId<K>, instant: Instant) {
+        Self::lint_instant(instant);
 
         if let Some(old_instant) = self.ids.insert(id, instant) {
             // remove older reference to id
@@ -137,23 +147,46 @@ where
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum Operation {
-    Cancel,
-    Set(Instant),
+pub trait TimeoutMessage<K: Rex>:
+    std::fmt::Debug
+    + RexMessage
+    + From<UnaryRequest<K, Operation<Self::Item>>>
+    + TryInto<UnaryRequest<K, Operation<Self::Item>>, Error = Report<ConversionError>>
+{
+    type Item: Copy + Send + std::fmt::Debug;
 }
 
-impl std::fmt::Display for Operation {
+pub trait Timeout: Rex
+where
+    Self::Message: TimeoutMessage<Self>,
+{
+    fn return_item(&self, _item: RetainItem<Self>) -> Option<Self::Input> {
+        None
+    }
+}
+
+#[derive(Copy, Clone, Debug, derive_more::Display)]
+pub struct NoRetain;
+
+#[derive(Copy, Clone, Debug)]
+pub enum Operation<T> {
+    Cancel,
+    Set(Instant),
+    Retain(T, Instant),
+}
+
+impl<T> std::fmt::Display for Operation<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let op = match self {
             Operation::Cancel => "timeout::Cancel",
             Operation::Set(_) => "timeout::Set",
+            Operation::Retain(_, _) => "timeout::Retain",
         };
         write!(f, "{op}")
     }
 }
 
-impl Operation {
+impl<T> Operation<T> {
     #[must_use]
     pub fn from_duration(duration: Duration) -> Self {
         Self::Set(Instant::now() + duration)
@@ -165,12 +198,14 @@ impl Operation {
     }
 }
 
-pub type TimeoutInput<K> = UnaryRequest<K, Operation>;
+pub type TimeoutInput<K> = UnaryRequest<K, TimeoutOp<K>>;
+pub type TimeoutOp<K> = Operation<<<K as Rex>::Message as TimeoutMessage<K>>::Item>;
+pub type RetainItem<K> = <<K as Rex>::Message as TimeoutMessage<K>>::Item;
 
-impl<K> UnaryRequest<K, Operation>
+impl<K> UnaryRequest<K, TimeoutOp<K>>
 where
     K: Rex,
-    K::Message: From<UnaryRequest<K, Operation>>,
+    K::Message: TimeoutMessage<K>,
 {
     #[cfg(test)]
     pub(crate) fn set_timeout_millis(id: StateId<K>, millis: u64) -> Self {
@@ -194,12 +229,19 @@ where
         }
     }
 
+    pub fn retain(id: StateId<K>, item: RetainItem<K>, duration: Duration) -> Self {
+        Self {
+            id,
+            op: Operation::Retain(item, Instant::now() + duration),
+        }
+    }
+
     #[cfg(test)]
     fn with_id(&self, id: StateId<K>) -> Self {
         Self { id, ..*self }
     }
     #[cfg(test)]
-    fn with_op(&self, op: Operation) -> Self {
+    fn with_op(&self, op: TimeoutOp<K>) -> Self {
         Self { op, ..*self }
     }
 }
@@ -209,6 +251,7 @@ where
 pub struct TimeoutManager<K>
 where
     K: Rex,
+    K::Message: TimeoutMessage<K>,
 {
     // the interval at which  the TimeoutLedger checks for timeouts
     tick_rate: Duration,
@@ -220,9 +263,8 @@ where
 
 impl<K> TimeoutManager<K>
 where
-    K: Rex,
-    K::Message: TryInto<TimeoutInput<K>>,
-    <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
+    K: Rex + Timeout,
+    K::Message: TimeoutMessage<K>,
 {
     #[must_use]
     pub fn new(
@@ -270,6 +312,9 @@ where
                                 Operation::Set(instant) => {
                                     ledger.set_timeout(id, instant);
                                 }
+                                Operation::Retain(item, instant) => {
+                                    ledger.retain(id, instant, item)
+                                }
                             }
                         }
                         Err(_e) => {
@@ -277,21 +322,6 @@ where
                             continue;
                         }
                     }
-                    /*
-                    let Notification::Timeout(TimeoutInput { id, op }) = notification else {
-                        warn!("Invalid input");
-                        continue;
-                    };
-                    let mut ledger = in_ledger.lock();
-                    match op {
-                        Operation::Cancel => {
-                            ledger.cancel_timeout(id);
-                        }
-                        Operation::Set(instant) => {
-                            ledger.set_timeout(id, instant);
-                        }
-                    }
-                    */
                 }
             }
             .in_current_span(),
@@ -324,7 +354,23 @@ where
                             // that later timeouts will be on top of the stack
                             signal_queue.push_front(Signal { id, input });
                         } else {
-                            warn!("timeout not supported!");
+                            warn!(%id, "timeout not supported!");
+                        }
+                    }
+
+                    let mut release = ledger.retainer.split_off(&now);
+                    std::mem::swap(&mut release, &mut ledger.retainer);
+                    for (id, item) in release
+                        .into_values()
+                        .flat_map(IntoIterator::into_iter)
+                        .collect::<Vec<_>>()
+                    {
+                        if let Some(input) = id.return_item(item) {
+                            // caveat with this push_front setup is
+                            // that later timeouts will be on top of the stack
+                            signal_queue.push_front(Signal { id, input });
+                        } else {
+                            warn!(%id, "timeout not supported!");
                         }
                     }
                 }
@@ -338,9 +384,8 @@ where
 
 impl<K> NotificationProcessor<K::Message> for TimeoutManager<K>
 where
-    K: Rex,
-    K::Message: TryInto<TimeoutInput<K>>,
-    <K::Message as TryInto<TimeoutInput<K>>>::Error: Send,
+    K: Rex + Timeout,
+    K::Message: TimeoutMessage<K>,
 {
     fn init(&mut self, join_set: &mut JoinSet<()>) -> UnboundedSender<Notification<K::Message>> {
         self.init_inner_with_handle(join_set)
