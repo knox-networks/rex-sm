@@ -20,6 +20,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct Insert<Id> {
     pub parent_id: Option<Id>,
     pub id: Id,

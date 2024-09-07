@@ -147,7 +147,7 @@ where
             f,
             "{:?}<{}>",
             self.kind,
-            self.is_nil()
+            (!self.is_nil())
                 .then(|| bs58::encode(self.uuid).into_string())
                 .unwrap_or_else(|| "NIL".to_string())
         )

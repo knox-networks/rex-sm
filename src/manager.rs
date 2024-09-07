@@ -278,7 +278,7 @@ where
     fn new_child(&self, ctx: &SmContext<K>, child_id: StateId<K>) {
         let id = ctx.id;
         let tree = ctx.state_store.get_tree(id).unwrap();
-        ctx.state_store.insert_ref(id, tree.clone());
+        ctx.state_store.insert_ref(child_id, tree.clone());
         let mut tree = tree.lock();
         tree.insert(Insert {
             parent_id: Some(ctx.id),
@@ -387,9 +387,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        node::{Insert, Node},
         notification::GetTopic,
-        storage::StateStore,
         test_support::Hold,
         timeout::{Timeout, TimeoutMessage, TimeoutTopic, TEST_TICK_RATE, TEST_TIMEOUT},
         Rex, RexBuilder, RexMessage,
@@ -608,21 +606,9 @@ mod tests {
                     let ping_id = StateId::new_rand(Game::Ping);
                     let pong_id = StateId::new_rand(Game::Pong);
                     // Menu + Ping + Pong
-                    let menu_tree = Node::new(id)
-                        .into_insert(Insert {
-                            parent_id: Some(id),
-                            id: ping_id,
-                        })
-                        .into_insert(Insert {
-                            parent_id: Some(id),
-                            id: pong_id,
-                        });
-
-                    let tree = StateStore::new_tree(menu_tree);
-                    for id in [id, ping_id, pong_id] {
-                        ctx.state_store.insert_ref(id, tree.clone());
-                    }
-
+                    self.create_tree(&ctx);
+                    self.new_child(&ctx, ping_id);
+                    self.new_child(&ctx, pong_id);
                     // signal to Ping state machine
                     ctx.signal_queue.push_back(Signal {
                         id: ping_id,
@@ -674,6 +660,7 @@ mod tests {
                 error!(?input, "invalid input!");
                 return;
             };
+            assert!(ctx.get_parent_id().is_some());
             let state = ctx.get_state().unwrap();
             if Self::terminal_state(state) {
                 warn!(%id, ?state, "Ignoring input due to invalid state");
@@ -745,6 +732,7 @@ mod tests {
                 warn!(?state, "Ignoring input due to invalid state");
                 return;
             }
+            assert!(ctx.get_parent_id().is_some());
 
             match input {
                 PongInput::Packet(Packet {
