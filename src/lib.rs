@@ -42,6 +42,7 @@ pub trait State: fmt::Debug + Send + PartialEq + Copy {
 pub trait Kind: fmt::Debug + Send + Sized {
     type State: State<Input = Self::Input> + AsRef<Self>;
     type Input: Send + Sync + 'static + fmt::Debug;
+
     fn new_state(&self) -> Self::State;
     fn failed_state(&self) -> Self::State;
     fn completed_state(&self) -> Self::State;
