@@ -38,15 +38,18 @@ macro_rules! node_state {
         }
 
         impl State for NodeState {
-            fn get_kind(&self) -> &dyn Kind<State = NodeState> {
+            type Input = ();
+        }
+        impl AsRef<NodeKind> for NodeState {
+            fn as_ref(&self) -> &NodeKind {
                 match self {
-                    $( NodeState::$name(_) => &NodeKind::$name, )*
+                    $( Self::$name(_) => &NodeKind::$name, )*
                 }
             }
         }
-
         impl Kind for NodeKind {
             type State = NodeState;
+            type Input = ();
 
             fn new_state(&self) -> Self::State {
                 match self {
@@ -115,7 +118,11 @@ pub enum TestState {
 }
 
 impl State for TestState {
-    fn get_kind(&self) -> &dyn Kind<State = TestState> {
+    type Input = TestInput;
+}
+
+impl AsRef<TestKind> for TestState {
+    fn as_ref(&self) -> &TestKind {
         &TestKind
     }
 }
@@ -125,6 +132,7 @@ pub struct TestKind;
 
 impl Kind for TestKind {
     type State = TestState;
+    type Input = TestInput;
 
     fn new_state(&self) -> Self::State {
         TestState::New
@@ -166,7 +174,6 @@ pub struct OutPacket(pub Vec<u8>);
 pub struct InPacket(pub Vec<u8>);
 
 impl Rex for TestKind {
-    type Input = TestInput;
     type Message = TestMsg;
 
     fn state_input(&self, _state: <Self as Kind>::State) -> Option<Self::Input> {
