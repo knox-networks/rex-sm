@@ -45,7 +45,7 @@ struct RawDeque<T> {
 }
 
 impl<T> RawDeque<T> {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             front_values: VecDeque::new(),
             back_values: VecDeque::new(),
@@ -108,7 +108,7 @@ impl<T> StreamableDeque<T> {
 
     /// Returns a stream of items using `pop_front()`
     /// This opens us up to handle a `back_stream()` as well
-    pub fn stream(&self) -> StreamReceiver<T> {
+    pub const fn stream(&self) -> StreamReceiver<T> {
         StreamReceiver {
             queue: self,
             awake: None,
@@ -172,7 +172,7 @@ impl<'a, T> Drop for StreamReceiver<'a, T> {
     fn drop(&mut self) {
         let awake = self.awake.take().map(|w| w.load(Ordering::Relaxed));
 
-        if let Some(true) = awake {
+        if awake == Some(true) {
             let mut queue_wakers = self.queue.inner.lock();
             // StreamReceiver was woken by a None, notify another
             if let Some(n) = queue_wakers.rx_notifiers.pop_front() {

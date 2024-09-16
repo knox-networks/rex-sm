@@ -97,7 +97,7 @@ where
     }
 
     #[must_use]
-    pub fn with_timeout_manager(
+    pub const fn with_timeout_manager(
         mut self,
         timeout_topic: <K::Message as RexMessage>::Topic,
     ) -> Self {
@@ -106,7 +106,7 @@ where
     }
 
     #[must_use]
-    pub fn with_tick_rate(mut self, tick_rate: Duration) -> Self {
+    pub const fn with_tick_rate(mut self, tick_rate: Duration) -> Self {
         self.tick_rate = Some(tick_rate);
         self
     }

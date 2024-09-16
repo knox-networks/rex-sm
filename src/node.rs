@@ -36,7 +36,7 @@ where
     }
 
     #[must_use]
-    pub fn zipper(self) -> Zipper<StateId<K>, K::State> {
+    pub const fn zipper(self) -> Zipper<StateId<K>, K::State> {
         Zipper {
             node: self,
             parent: None,
@@ -88,7 +88,7 @@ where
         // this can be optimized later but right now allocation impact
         // is non existent since Node::new
         // does not grow its `?Sized` types
-        let mut swap_node = Node::new(self.id);
+        let mut swap_node = Self::new(self.id);
         std::mem::swap(&mut swap_node, self);
 
         swap_node = swap_node.into_insert(insert);
@@ -101,7 +101,7 @@ where
     pub fn into_insert(
         self,
         Insert { parent_id, id }: Insert<StateId<K>>,
-    ) -> Node<StateId<K>, K::State> {
+    ) -> Self {
         // inserts at this point should be guaranteed Some(id)
         // ince a parent_id.is_none() should be handled by the node
         // store through a new graph creation
@@ -134,7 +134,7 @@ where
 
     pub fn update(&mut self, update: Update<StateId<K>, K::State>) {
         // see Node::insert
-        let mut swap_node = Node::new(self.id);
+        let mut swap_node = Self::new(self.id);
         std::mem::swap(&mut swap_node, self);
 
         swap_node = swap_node.into_update(update);
@@ -148,7 +148,7 @@ where
         Update { id, state }: Update<StateId<K>, K::State>,
     ) -> Option<StateId<K>> {
         // see Node::insert
-        let mut swap_node = Node::new(self.id);
+        let mut swap_node = Self::new(self.id);
         std::mem::swap(&mut swap_node, self);
 
         let (parent_id, mut swap_node) = swap_node
@@ -165,10 +165,10 @@ where
     // apply a closure to all nodes in a tree
     pub fn update_all_fn<F>(&mut self, f: F)
     where
-        F: Fn(Zipper<StateId<K>, K::State>) -> Node<StateId<K>, K::State> + Clone,
+        F: Fn(Zipper<StateId<K>, K::State>) -> Self + Clone,
     {
         // see Node::insert
-        let mut swap_node = Node::new(self.id);
+        let mut swap_node = Self::new(self.id);
         std::mem::swap(&mut swap_node, self);
 
         swap_node = swap_node.zipper().finish_update_fn(f);
@@ -180,7 +180,7 @@ where
     pub fn into_update(
         self,
         Update { id, state }: Update<StateId<K>, K::State>,
-    ) -> Node<StateId<K>, K::State> {
+    ) -> Self {
         self.zipper().by_id(id).set_state(state).finish_update()
     }
 }
@@ -222,7 +222,7 @@ where
         self
     }
 
-    fn child(mut self, idx: usize) -> Zipper<StateId<K>, K::State> {
+    fn child(mut self, idx: usize) -> Self {
         // Remove the specified child from the node's children.
         //  Zipper should avoid having a parent reference
         // since parents will be mutated during node refocusing.
@@ -230,27 +230,27 @@ where
         let child = self.node.children.swap_remove(idx);
 
         // Return a new Zipper focused on the specified child.
-        Zipper {
+        Self {
             node: child,
             parent: Some(Box::new(self)),
             self_idx: idx,
         }
     }
 
-    fn set_state(mut self, state: K::State) -> Zipper<StateId<K>, K::State> {
+    const fn set_state(mut self, state: K::State) -> Self {
         self.node.state = state;
         self
     }
 
-    fn insert_child(mut self, id: StateId<K>) -> Zipper<StateId<K>, K::State> {
+    fn insert_child(mut self, id: StateId<K>) -> Self {
         self.node.children.push(Node::new(id));
         self
     }
 
-    fn parent(self) -> Zipper<StateId<K>, K::State> {
+    fn parent(self) -> Self {
         // Destructure this Zipper
         // https://github.com/rust-lang/rust/issues/16293#issuecomment-185906859
-        let Zipper {
+        let Self {
             node,
             parent,
             self_idx,
@@ -267,7 +267,7 @@ where
         parent.node.children.swap(self_idx, last_idx);
 
         // Return a new Zipper focused on the parent.
-        Zipper {
+        Self {
             node: parent.node,
             parent: parent.parent,
             self_idx: parent.self_idx,
@@ -303,7 +303,7 @@ where
     // act on all nodes
     fn finish_update_fn<F>(mut self, f: F) -> ZipperNode<K>
     where
-        F: Fn(Zipper<StateId<K>, K::State>) -> ZipperNode<K> + Clone,
+        F: Fn(Self) -> ZipperNode<K> + Clone,
     {
         self.node.children = self
             .node

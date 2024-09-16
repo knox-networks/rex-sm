@@ -112,7 +112,7 @@ where
 }
 
 impl<K: Kind> StateId<K> {
-    pub fn new(kind: K, uuid: Uuid) -> Self {
+    pub const fn new(kind: K, uuid: Uuid) -> Self {
         Self { kind, uuid }
     }
 
@@ -129,7 +129,7 @@ impl<K: Kind> StateId<K> {
     // for testing purposes, easily distinguish UUIDs
     // by numerical value
     #[cfg(test)]
-    pub fn new_with_u128(kind: K, v: u128) -> Self {
+    pub const fn new_with_u128(kind: K, v: u128) -> Self {
         Self {
             kind,
             uuid: Uuid::from_u128(v),

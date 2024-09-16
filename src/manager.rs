@@ -434,7 +434,7 @@ mod tests {
 
     // determines whether Ping or Pong will await before packet send
     //
-    #[derive(Copy, Clone, PartialEq, Debug)]
+    #[derive(Copy, Clone, PartialEq, Eq, Debug)]
     pub struct WhoHolds(Option<Game>);
 
     #[derive(Clone, PartialEq, Debug)]
@@ -445,7 +445,7 @@ mod tests {
         FailedPong,
     }
 
-    #[derive(Copy, Clone, PartialEq, Default, Debug)]
+    #[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
     pub enum MenuState {
         #[default]
         Ready,
@@ -453,7 +453,7 @@ mod tests {
         Failed,
     }
 
-    #[derive(Copy, Clone, PartialEq, Default, Debug)]
+    #[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
     pub enum PingState {
         #[default]
         Ready,
@@ -471,7 +471,7 @@ mod tests {
         RecvTimeout(Instant),
     }
 
-    #[derive(Copy, Clone, PartialEq, Default, Debug)]
+    #[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
     pub enum PongState {
         #[default]
         Ready,
@@ -501,9 +501,9 @@ mod tests {
     impl AsRef<Game> for GameState {
         fn as_ref(&self) -> &Game {
             match self {
-                GameState::Ping(_) => &Game::Ping,
-                GameState::Pong(_) => &Game::Pong,
-                GameState::Menu(_) => &Game::Menu,
+                Self::Ping(_) => &Game::Ping,
+                Self::Pong(_) => &Game::Pong,
+                Self::Menu(_) => &Game::Menu,
             }
         }
     }
@@ -519,7 +519,7 @@ mod tests {
         type Message = GameMsg;
 
         fn state_input(&self, state: <Self as Kind>::State) -> Option<Self::Input> {
-            if *self != Game::Menu {
+            if *self != Self::Menu {
                 return None;
             }
 
@@ -534,9 +534,9 @@ mod tests {
 
         fn timeout_input(&self, instant: Instant) -> Option<Self::Input> {
             match self {
-                Game::Ping => Some(PingInput::RecvTimeout(instant).into()),
-                Game::Pong => Some(PongInput::RecvTimeout(instant).into()),
-                Game::Menu => None,
+                Self::Ping => Some(PingInput::RecvTimeout(instant).into()),
+                Self::Pong => Some(PongInput::RecvTimeout(instant).into()),
+                Self::Menu => None,
             }
         }
     }
@@ -544,9 +544,9 @@ mod tests {
     impl Timeout for Game {
         fn return_item(&self, item: RetainItem<Self>) -> Option<Self::Input> {
             match self {
-                Game::Ping => Some(GameInput::Ping(item.into())),
-                Game::Pong => Some(GameInput::Pong(item.into())),
-                Game::Menu => None,
+                Self::Ping => Some(GameInput::Ping(item.into())),
+                Self::Pong => Some(GameInput::Pong(item.into())),
+                Self::Menu => None,
             }
         }
     }
@@ -557,25 +557,25 @@ mod tests {
 
         fn new_state(&self) -> Self::State {
             match self {
-                Game::Ping => GameState::Ping(PingState::default()),
-                Game::Pong => GameState::Pong(PongState::default()),
-                Game::Menu => GameState::Menu(MenuState::default()),
+                Self::Ping => GameState::Ping(PingState::default()),
+                Self::Pong => GameState::Pong(PongState::default()),
+                Self::Menu => GameState::Menu(MenuState::default()),
             }
         }
 
         fn failed_state(&self) -> Self::State {
             match self {
-                Game::Ping => GameState::Ping(PingState::Failed),
-                Game::Pong => GameState::Pong(PongState::Failed),
-                Game::Menu => GameState::Menu(MenuState::Failed),
+                Self::Ping => GameState::Ping(PingState::Failed),
+                Self::Pong => GameState::Pong(PongState::Failed),
+                Self::Menu => GameState::Menu(MenuState::Failed),
             }
         }
 
         fn completed_state(&self) -> Self::State {
             match self {
-                Game::Ping => GameState::Ping(PingState::Done),
-                Game::Pong => GameState::Pong(PongState::Done),
-                Game::Menu => GameState::Menu(MenuState::Done),
+                Self::Ping => GameState::Ping(PingState::Done),
+                Self::Pong => GameState::Pong(PongState::Done),
+                Self::Menu => GameState::Menu(MenuState::Done),
             }
         }
     }
@@ -594,7 +594,7 @@ mod tests {
             };
 
             let state = ctx.get_state();
-            if let Some(true) = state.map(Game::is_terminal) {
+            if state.map(Game::is_terminal) == Some(true) {
                 warn!(%id, ?state, "Ignoring input due to invalid state");
                 return;
             }
@@ -688,7 +688,7 @@ mod tests {
                     self.set_timeout(&ctx, TEST_TIMEOUT);
                     packet.msg += 5;
 
-                    if let WhoHolds(Some(Game::Ping)) = packet.who_holds {
+                    if packet.who_holds == WhoHolds(Some(Game::Ping)) {
                         info!(msg = packet.msg, "HOLDING");
                         // hold for half theduration of the message
                         let hold_for = Duration::from_millis(packet.msg);
@@ -759,7 +759,7 @@ mod tests {
                     }
                     packet.msg += 5;
 
-                    if let WhoHolds(Some(Game::Pong)) = packet.who_holds {
+                    if packet.who_holds == WhoHolds(Some(Game::Pong)) {
                         info!(msg = packet.msg, "HOLDING");
                         // hold for half the duration of the message
                         let hold_for = Duration::from_millis(packet.msg);
