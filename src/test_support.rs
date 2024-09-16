@@ -161,7 +161,7 @@ impl TryFrom<InPacket> for TestInput {
 }
 impl Timeout for TestKind {}
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TestInput {
     Timeout(Instant),
     Packet(InPacket),

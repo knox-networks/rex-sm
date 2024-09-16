@@ -162,6 +162,7 @@ impl<'a, T> Stream for StreamReceiver<'a, T> {
                 awake: awake.clone(),
             });
             self.awake = Some(awake);
+            drop(inner);
             Poll::Pending
         }
     }

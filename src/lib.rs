@@ -120,7 +120,7 @@ impl<K: Kind> StateId<K> {
         Self::new(kind, Uuid::new_v4())
     }
 
-    pub fn nil(kind: K) -> Self {
+    pub const fn nil(kind: K) -> Self {
         Self::new(kind, Uuid::nil())
     }
     pub fn is_nil(&self) -> bool {

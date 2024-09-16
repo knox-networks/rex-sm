@@ -355,6 +355,7 @@ where
 
                     let mut release = ledger.retainer.split_off(&now);
                     std::mem::swap(&mut release, &mut ledger.retainer);
+                    drop(ledger);
                     for (id, item) in release.into_values().flat_map(IntoIterator::into_iter) {
                         if let Some(input) = id.return_item(item) {
                             // caveat with this push_front setup is

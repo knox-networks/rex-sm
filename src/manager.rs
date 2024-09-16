@@ -330,9 +330,9 @@ where
             tracing::error!(%id, "Tree not found!");
             panic!("missing SmTree");
         };
-        let mut guard = tree.lock();
 
-        if let Some(id) = guard.update_and_get_parent_id(Update { id, state }) {
+        let parent_id = tree.lock().update_and_get_parent_id(Update { id, state });
+        if let Some(id) = parent_id {
             ctx.signal_queue.signal_state_change(id, state);
 
             return Some(id);
@@ -437,7 +437,7 @@ mod tests {
     #[derive(Copy, Clone, PartialEq, Eq, Debug)]
     pub struct WhoHolds(Option<Game>);
 
-    #[derive(Clone, PartialEq, Debug)]
+    #[derive(Clone, PartialEq, Eq, Debug)]
     pub enum MenuInput {
         Play(WhoHolds),
         PingPongComplete,
@@ -488,7 +488,7 @@ mod tests {
         Returned(Hold<Packet>),
     }
 
-    #[derive(Copy, Clone, PartialEq, Debug)]
+    #[derive(Copy, Clone, PartialEq, Eq, Debug)]
     pub enum GameState {
         Ping(PingState),
         Pong(PongState),
@@ -619,9 +619,8 @@ mod tests {
                 }
                 failure @ (MenuInput::FailedPing | MenuInput::FailedPong) => {
                     let tree = ctx.get_tree().unwrap();
-                    let mut guard = tree.lock();
                     // set all states to failed state
-                    guard.update_all_fn(|mut z| {
+                    tree.lock().update_all_fn(|mut z| {
                         z.node.state = z.node.state.as_ref().failed_state();
                         let id = z.node.id;
                         ctx.notification_queue
@@ -838,9 +837,8 @@ mod tests {
         drop(node);
 
         let tree = ctx.state_store.get_tree(pong_id).unwrap();
-        let node = tree.lock();
-        let state = node.get_state(pong_id).unwrap();
-        assert_eq!(GameState::Pong(PongState::Done), *state);
+        let state = tree.lock().get_state(pong_id).copied().unwrap();
+        assert_eq!(GameState::Pong(PongState::Done), state);
     }
 
     #[tracing_test::traced_test]
@@ -918,6 +916,7 @@ mod tests {
         assert_eq!(GameState::Ping(PingState::Failed), ping_node.state);
         assert_eq!(GameState::Pong(PongState::Failed), pong_node.state);
         // Ensure that our Menu failed due to Ping
+        drop(node);
         assert_eq!(MenuInput::FailedPing, *menu_failures.get(&menu_id).unwrap());
     }
 }
