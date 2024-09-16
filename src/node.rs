@@ -1,6 +1,6 @@
-use std::{collections::HashSet, fmt, hash::Hash};
+use std::collections::HashSet;
 
-use crate::{HashKind, Kind, State, StateId};
+use crate::{HashKind, Kind, StateId};
 
 #[derive(Debug)]
 pub struct Insert<Id> {
@@ -202,6 +202,8 @@ pub struct Zipper<Id, S> {
     self_idx: usize,
 }
 
+type ZipperNode<K> = Node<StateId<K>, <K as Kind>::State>;
+
 impl<K> Zipper<StateId<K>, K::State>
 where
     K: Kind + HashKind,
@@ -273,7 +275,7 @@ where
     }
 
     //  try something like Iterator::fold
-    fn finish_insert(mut self, id: StateId<K>) -> Node<StateId<K>, K::State> {
+    fn finish_insert(mut self, id: StateId<K>) -> ZipperNode<K> {
         self.node.descendant_keys.insert(id);
         while self.parent.is_some() {
             self = self.parent();
@@ -284,7 +286,7 @@ where
     }
 
     #[must_use]
-    pub fn finish_update(mut self) -> Node<StateId<K>, K::State> {
+    pub fn finish_update(mut self) -> ZipperNode<K> {
         while self.parent.is_some() {
             self = self.parent();
         }
@@ -293,15 +295,15 @@ where
     }
 
     // only act on parent nodes
-    fn finish_update_parent_id(self) -> (Option<StateId<K>>, Node<StateId<K>, K::State>) {
+    fn finish_update_parent_id(self) -> (Option<StateId<K>>, ZipperNode<K>) {
         let parent_id = self.parent.as_ref().map(|z| z.node.id);
         (parent_id, self.finish_update())
     }
 
     // act on all nodes
-    fn finish_update_fn<F>(mut self, f: F) -> Node<StateId<K>, K::State>
+    fn finish_update_fn<F>(mut self, f: F) -> ZipperNode<K>
     where
-        F: Fn(Zipper<StateId<K>, K::State>) -> Node<StateId<K>, K::State> + Clone,
+        F: Fn(Zipper<StateId<K>, K::State>) -> ZipperNode<K> + Clone,
     {
         self.node.children = self
             .node

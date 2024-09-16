@@ -313,7 +313,7 @@ where
                                     ledger.set_timeout(id, instant);
                                 }
                                 Operation::Retain(item, instant) => {
-                                    ledger.retain(id, instant, item)
+                                    ledger.retain(id, instant, item);
                                 }
                             }
                         }

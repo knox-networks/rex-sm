@@ -37,23 +37,35 @@ impl<K: Rex> StateStore<StateId<K>, K::State> {
         }
     }
 
+    /// # Panics
+    ///
+    /// Will panic if [`StateId`] is nil
     pub fn new_tree(node: Node<StateId<K>, K::State>) -> Tree<K> {
         assert!(!node.id.is_nil());
         Arc::new(FairMutex::new(node))
     }
 
-    // insert node creates a new reference to the same node
+    /// insert node creates a new reference to the same node
+    /// # Panics
+    ///
+    /// Will panic if [`StateId`] is nil
     pub fn insert_ref(&self, id: StateId<K>, node: Tree<K>) {
         assert!(!id.is_nil());
         self.trees.insert(id, node);
     }
 
     // decrements the reference count on a given `Node`
+    /// # Panics
+    ///
+    /// Will panic if [`StateId`] is nil
     pub fn remove_ref(&self, id: StateId<K>) {
         assert!(!id.is_nil());
         self.trees.remove(&id);
     }
 
+    /// # Panics
+    ///
+    /// Will panic if [`StateId`] is nil
     pub fn get_tree(&self, id: StateId<K>) -> Option<Tree<K>> {
         assert!(!id.is_nil());
         let node = self.trees.get(&id);

@@ -60,7 +60,7 @@ use crate::{
     queue::StreamableDeque,
     storage::{StateStore, Tree},
     timeout::{RetainItem, TimeoutInput, TimeoutMessage},
-    Kind, Rex, State, StateId,
+    Kind, Rex, StateId,
 };
 
 pub trait HashKind: Kind + fmt::Debug + Hash + Eq + PartialEq + 'static + Copy
@@ -385,7 +385,7 @@ mod tests {
         notification::GetTopic,
         test_support::Hold,
         timeout::{Timeout, TimeoutMessage, TimeoutTopic, TEST_TICK_RATE, TEST_TIMEOUT},
-        Rex, RexBuilder, RexMessage,
+        Rex, RexBuilder, RexMessage, State,
     };
 
     impl From<TimeoutInput<Game>> for GameMsg {
@@ -529,7 +529,7 @@ mod tests {
                 GameState::Pong(PongState::Failed) => Some(MenuInput::FailedPong),
                 _ => None,
             }
-            .map(|i| i.into())
+            .map(std::convert::Into::into)
         }
 
         fn timeout_input(&self, instant: Instant) -> Option<Self::Input> {
@@ -867,12 +867,12 @@ mod tests {
         {
             let tree = ctx.state_store.get_tree(menu_id).unwrap();
             let node = tree.lock();
-            let ping_node = &node.children[0];
-            let pong_node = &node.children[1];
+            let ping = &node.children[0];
+            let pong = &node.children[1];
             assert_eq!(menu_id, node.id);
             assert_eq!(GameState::Menu(MenuState::Failed), node.state);
-            assert_eq!(GameState::Ping(PingState::Failed), ping_node.state);
-            assert_eq!(GameState::Pong(PongState::Failed), pong_node.state);
+            assert_eq!(GameState::Ping(PingState::Failed), ping.state);
+            assert_eq!(GameState::Pong(PongState::Failed), pong.state);
 
             // !!NOTE!! ============================================================
             // we are trying to acquire another lock...

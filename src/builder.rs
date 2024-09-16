@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use bigerror::{ConversionError, Report};
 use tokio::{
@@ -216,9 +216,9 @@ where
     fn default() -> Self {
         Self {
             notification_queue: NotificationQueue::new(),
-            signal_queue: Default::default(),
-            state_machines: Default::default(),
-            notification_processors: Default::default(),
+            signal_queue: Arc::default(),
+            state_machines: Vec::default(),
+            notification_processors: Vec::default(),
             timeout_topic: None,
             tick_rate: None,
             outbound_tx: None,
