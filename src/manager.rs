@@ -138,6 +138,10 @@ impl<K: Rex> SmContext<K> {
         self.notification_queue.send(notification);
     }
 
+    pub fn signal_self(&self, input: K::Input) {
+        self.signal_queue.push_front(Signal { id: self.id, input });
+    }
+
     pub fn get_state(&self) -> Option<K::State> {
         let tree = self.state_store.get_tree(self.id)?;
         let guard = tree.lock();
@@ -147,6 +151,7 @@ impl<K: Rex> SmContext<K> {
     pub fn get_tree(&self) -> Option<Tree<K>> {
         self.state_store.get_tree(self.id)
     }
+
     pub fn has_state(&self) -> bool {
         self.state_store.get_tree(self.id).is_some()
     }
@@ -156,6 +161,10 @@ impl<K: Rex> SmContext<K> {
             let guard = tree.lock();
             guard.get_parent_id(self.id)
         })
+    }
+
+    pub fn has_parent(&self) -> bool {
+        self.get_parent_id().is_some()
     }
 }
 impl<K: Rex> Clone for SmContext<K> {
