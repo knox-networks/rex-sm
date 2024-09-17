@@ -178,9 +178,9 @@ pub enum Operation<T> {
 impl<T> std::fmt::Display for Operation<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let op = match self {
-            Operation::Cancel => "timeout::Cancel",
-            Operation::Set(_) => "timeout::Set",
-            Operation::Retain(_, _) => "timeout::Retain",
+            Self::Cancel => "timeout::Cancel",
+            Self::Set(_) => "timeout::Set",
+            Self::Retain(_, _) => "timeout::Retain",
         };
         write!(f, "{op}")
     }
@@ -222,7 +222,7 @@ where
         }
     }
 
-    pub fn cancel_timeout(id: StateId<K>) -> Self {
+    pub const fn cancel_timeout(id: StateId<K>) -> Self {
         Self {
             id,
             op: Operation::Cancel,
@@ -237,11 +237,11 @@ where
     }
 
     #[cfg(test)]
-    fn with_id(&self, id: StateId<K>) -> Self {
+    const fn with_id(&self, id: StateId<K>) -> Self {
         Self { id, ..*self }
     }
     #[cfg(test)]
-    fn with_op(&self, op: TimeoutOp<K>) -> Self {
+    const fn with_op(&self, op: TimeoutOp<K>) -> Self {
         Self { op, ..*self }
     }
 }
@@ -313,7 +313,7 @@ where
                                     ledger.set_timeout(id, instant);
                                 }
                                 Operation::Retain(item, instant) => {
-                                    ledger.retain(id, instant, item)
+                                    ledger.retain(id, instant, item);
                                 }
                             }
                         }
@@ -338,15 +338,10 @@ where
                     let now = Instant::now();
                     let mut ledger = timer_ledger.lock();
                     // Get all instants where `instant <= now`
-                    let expired: Vec<Instant> =
-                        ledger.timers.range(..=now).map(|(k, _)| *k).collect();
+                    let mut release = ledger.timers.split_off(&now);
+                    std::mem::swap(&mut release, &mut ledger.timers);
 
-                    for id in expired
-                        .iter()
-                        .filter_map(|t| ledger.timers.remove(t))
-                        .flat_map(IntoIterator::into_iter)
-                        .collect::<Vec<_>>()
-                    {
+                    for id in release.into_values().flat_map(IntoIterator::into_iter) {
                         warn!(%id, "timed out");
                         ledger.ids.remove(&id);
                         if let Some(input) = id.timeout_input(now) {
@@ -360,11 +355,8 @@ where
 
                     let mut release = ledger.retainer.split_off(&now);
                     std::mem::swap(&mut release, &mut ledger.retainer);
-                    for (id, item) in release
-                        .into_values()
-                        .flat_map(IntoIterator::into_iter)
-                        .collect::<Vec<_>>()
-                    {
+                    drop(ledger);
+                    for (id, item) in release.into_values().flat_map(IntoIterator::into_iter) {
                         if let Some(input) = id.return_item(item) {
                             // caveat with this push_front setup is
                             // that later timeouts will be on top of the stack
@@ -415,7 +407,7 @@ mod tests {
     impl TestDefault for TimeoutManager<TestKind> {
         fn test_default() -> Self {
             let signal_queue = SignalQueue::default();
-            TimeoutManager::new(signal_queue, TestTopic::Timeout).with_tick_rate(TEST_TICK_RATE)
+            Self::new(signal_queue, TestTopic::Timeout).with_tick_rate(TEST_TICK_RATE)
         }
     }
 
