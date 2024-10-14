@@ -1,3 +1,4 @@
+#![allow(clippy::module_name_repetitions)]
 use std::fmt;
 
 use bigerror::reportable;
@@ -32,69 +33,24 @@ pub use timeout::Timeout;
 /// enumerations or enumerations whose variants only contain field-less enumerations; note that
 /// `Copy` is a required supertrait.
 pub trait State: fmt::Debug + Send + PartialEq + Copy {
-    fn get_kind(&self) -> &dyn Kind<State = Self>;
-    fn fail(&mut self)
-    where
-        Self: Sized,
-    {
-        *self = self.get_kind().failed_state();
-    }
-    fn complete(&mut self)
-    where
-        Self: Sized,
-    {
-        *self = self.get_kind().completed_state();
-    }
-    fn is_completed(&self) -> bool
-    where
-        Self: Sized,
-        for<'a> &'a Self: PartialEq<&'a Self>,
-    {
-        self == &self.get_kind().completed_state()
-    }
-
-    fn is_failed(&self) -> bool
-    where
-        Self: Sized,
-        for<'a> &'a Self: PartialEq<&'a Self>,
-    {
-        self == &self.get_kind().failed_state()
-    }
-    fn is_new(&self) -> bool
-    where
-        Self: Sized,
-        for<'a> &'a Self: PartialEq<&'a Self>,
-    {
-        self == &self.get_kind().new_state()
-    }
-
-    /// represents a state that will no longer change
-    fn is_terminal(&self) -> bool
-    where
-        Self: Sized,
-    {
-        self.is_failed() || self.is_completed()
-    }
-
-    /// `&dyn Kind<State = Self>` cannot do direct partial comparison
-    /// due to type opacity
-    /// so `State::new_state(self)` is called to allow a vtable lookup
-    fn kind_eq(&self, kind: &dyn Kind<State = Self>) -> bool
-    where
-        Self: Sized,
-    {
-        self.get_kind().new_state() == kind.new_state()
-    }
+    type Input: Send + Sync + 'static + fmt::Debug;
 }
 
 /// Acts as a discriminant between various [`State`] enumerations, similar to
 /// [`std::mem::Discriminant`].
 /// Used to define the scope for [`Signal`]s cycled through a [`StateMachineManager`].
-pub trait Kind: fmt::Debug + Send {
-    type State: State;
+pub trait Kind: fmt::Debug + Send + Sized {
+    type State: State<Input = Self::Input> + AsRef<Self>;
+    type Input: Send + Sync + 'static + fmt::Debug;
+
     fn new_state(&self) -> Self::State;
     fn failed_state(&self) -> Self::State;
     fn completed_state(&self) -> Self::State;
+    // /// represents a state that will no longer change
+    fn is_terminal(state: Self::State) -> bool {
+        let kind = state.as_ref();
+        kind.completed_state() == state || kind.failed_state() == state
+    }
 }
 
 /// Titular trait of the library that enables Hierarchical State Machine (HSM for short) behaviour.
@@ -109,13 +65,15 @@ pub trait Kind: fmt::Debug + Send {
 /// ```text
 ///
 /// Kind -> Rex::Message
-///   ::     ::       ::
-///   State  Input    Topic
+///   ::              ::
+///   State::Input    Topic
 /// ```
-pub trait Rex: Kind + HashKind {
-    type Input: Send + Sync + 'static + fmt::Debug;
+pub trait Rex: Kind + HashKind
+where
+    Self::State: AsRef<Self>,
+{
     type Message: RexMessage;
-    fn state_input(&self, state: <Self as Kind>::State) -> Option<Self::Input>;
+    fn state_input(&self, state: Self::State) -> Option<Self::Input>;
     fn timeout_input(&self, instant: Instant) -> Option<Self::Input>;
 }
 
@@ -155,7 +113,7 @@ where
 }
 
 impl<K: Kind> StateId<K> {
-    pub fn new(kind: K, uuid: Uuid) -> Self {
+    pub const fn new(kind: K, uuid: Uuid) -> Self {
         Self { kind, uuid }
     }
 
@@ -163,7 +121,7 @@ impl<K: Kind> StateId<K> {
         Self::new(kind, Uuid::new_v4())
     }
 
-    pub fn nil(kind: K) -> Self {
+    pub const fn nil(kind: K) -> Self {
         Self::new(kind, Uuid::nil())
     }
     pub fn is_nil(&self) -> bool {
@@ -172,7 +130,7 @@ impl<K: Kind> StateId<K> {
     // for testing purposes, easily distinguish UUIDs
     // by numerical value
     #[cfg(test)]
-    pub fn new_with_u128(kind: K, v: u128) -> Self {
+    pub const fn new_with_u128(kind: K, v: u128) -> Self {
         Self {
             kind,
             uuid: Uuid::from_u128(v),

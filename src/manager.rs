@@ -60,7 +60,7 @@ use crate::{
     queue::StreamableDeque,
     storage::{StateStore, Tree},
     timeout::{RetainItem, TimeoutInput, TimeoutMessage},
-    Kind, Rex, State, StateId,
+    Kind, Rex, StateId,
 };
 
 pub trait HashKind: Kind + fmt::Debug + Hash + Eq + PartialEq + 'static + Copy
@@ -138,6 +138,10 @@ impl<K: Rex> SmContext<K> {
         self.notification_queue.send(notification);
     }
 
+    pub fn signal_self(&self, input: K::Input) {
+        self.signal_queue.push_front(Signal { id: self.id, input });
+    }
+
     pub fn get_state(&self) -> Option<K::State> {
         let tree = self.state_store.get_tree(self.id)?;
         let guard = tree.lock();
@@ -147,6 +151,7 @@ impl<K: Rex> SmContext<K> {
     pub fn get_tree(&self) -> Option<Tree<K>> {
         self.state_store.get_tree(self.id)
     }
+
     pub fn has_state(&self) -> bool {
         self.state_store.get_tree(self.id).is_some()
     }
@@ -156,6 +161,10 @@ impl<K: Rex> SmContext<K> {
             let guard = tree.lock();
             guard.get_parent_id(self.id)
         })
+    }
+
+    pub fn has_parent(&self) -> bool {
+        self.get_parent_id().is_some()
     }
 }
 impl<K: Rex> Clone for SmContext<K> {
@@ -318,11 +327,6 @@ where
         self.update_state_and_signal(ctx, id.completed_state())
     }
 
-    /// represents a state that will no longer change
-    fn terminal_state(state: K::State) -> bool {
-        state.is_failed() || state.is_completed()
-    }
-
     /// update state is meant to be used to signal a parent state of a child state
     /// _if_ a parent exists, this function makes no assumptions of the potential
     /// structure of a state hierarchy and _should_ be just as performant on a single
@@ -335,9 +339,9 @@ where
             tracing::error!(%id, "Tree not found!");
             panic!("missing SmTree");
         };
-        let mut guard = tree.lock();
 
-        if let Some(id) = guard.update_and_get_parent_id(Update { id, state }) {
+        let parent_id = tree.lock().update_and_get_parent_id(Update { id, state });
+        if let Some(id) = parent_id {
             ctx.signal_queue.signal_state_change(id, state);
 
             return Some(id);
@@ -390,7 +394,7 @@ mod tests {
         notification::GetTopic,
         test_support::Hold,
         timeout::{Timeout, TimeoutMessage, TimeoutTopic, TEST_TICK_RATE, TEST_TIMEOUT},
-        Rex, RexBuilder, RexMessage,
+        Rex, RexBuilder, RexMessage, State,
     };
 
     impl From<TimeoutInput<Game>> for GameMsg {
@@ -431,7 +435,7 @@ mod tests {
     }
 
     #[derive(Clone, Debug, derive_more::From)]
-    pub enum Input {
+    pub enum GameInput {
         Ping(PingInput),
         Pong(PongInput),
         Menu(MenuInput),
@@ -439,10 +443,10 @@ mod tests {
 
     // determines whether Ping or Pong will await before packet send
     //
-    #[derive(Copy, Clone, PartialEq, Debug)]
+    #[derive(Copy, Clone, PartialEq, Eq, Debug)]
     pub struct WhoHolds(Option<Game>);
 
-    #[derive(Clone, PartialEq, Debug)]
+    #[derive(Clone, PartialEq, Eq, Debug)]
     pub enum MenuInput {
         Play(WhoHolds),
         PingPongComplete,
@@ -450,7 +454,7 @@ mod tests {
         FailedPong,
     }
 
-    #[derive(Copy, Clone, PartialEq, Default, Debug)]
+    #[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
     pub enum MenuState {
         #[default]
         Ready,
@@ -458,7 +462,7 @@ mod tests {
         Failed,
     }
 
-    #[derive(Copy, Clone, PartialEq, Default, Debug)]
+    #[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
     pub enum PingState {
         #[default]
         Ready,
@@ -476,7 +480,7 @@ mod tests {
         RecvTimeout(Instant),
     }
 
-    #[derive(Copy, Clone, PartialEq, Default, Debug)]
+    #[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
     pub enum PongState {
         #[default]
         Ready,
@@ -493,7 +497,7 @@ mod tests {
         Returned(Hold<Packet>),
     }
 
-    #[derive(Copy, Clone, PartialEq, Debug)]
+    #[derive(Copy, Clone, PartialEq, Eq, Debug)]
     pub enum GameState {
         Ping(PingState),
         Pong(PongState),
@@ -501,11 +505,14 @@ mod tests {
     }
 
     impl State for GameState {
-        fn get_kind(&self) -> &dyn Kind<State = Self> {
+        type Input = GameInput;
+    }
+    impl AsRef<Game> for GameState {
+        fn as_ref(&self) -> &Game {
             match self {
-                GameState::Ping(_) => &Game::Ping,
-                GameState::Pong(_) => &Game::Pong,
-                GameState::Menu(_) => &Game::Menu,
+                Self::Ping(_) => &Game::Ping,
+                Self::Pong(_) => &Game::Pong,
+                Self::Menu(_) => &Game::Menu,
             }
         }
     }
@@ -518,11 +525,10 @@ mod tests {
     }
 
     impl Rex for Game {
-        type Input = Input;
         type Message = GameMsg;
 
         fn state_input(&self, state: <Self as Kind>::State) -> Option<Self::Input> {
-            if *self != Game::Menu {
+            if *self != Self::Menu {
                 return None;
             }
 
@@ -532,14 +538,14 @@ mod tests {
                 GameState::Pong(PongState::Failed) => Some(MenuInput::FailedPong),
                 _ => None,
             }
-            .map(|i| i.into())
+            .map(std::convert::Into::into)
         }
 
         fn timeout_input(&self, instant: Instant) -> Option<Self::Input> {
             match self {
-                Game::Ping => Some(PingInput::RecvTimeout(instant).into()),
-                Game::Pong => Some(PongInput::RecvTimeout(instant).into()),
-                Game::Menu => None,
+                Self::Ping => Some(PingInput::RecvTimeout(instant).into()),
+                Self::Pong => Some(PongInput::RecvTimeout(instant).into()),
+                Self::Menu => None,
             }
         }
     }
@@ -547,37 +553,38 @@ mod tests {
     impl Timeout for Game {
         fn return_item(&self, item: RetainItem<Self>) -> Option<Self::Input> {
             match self {
-                Game::Ping => Some(Input::Ping(item.into())),
-                Game::Pong => Some(Input::Pong(item.into())),
-                Game::Menu => None,
+                Self::Ping => Some(GameInput::Ping(item.into())),
+                Self::Pong => Some(GameInput::Pong(item.into())),
+                Self::Menu => None,
             }
         }
     }
 
     impl Kind for Game {
         type State = GameState;
+        type Input = GameInput;
 
         fn new_state(&self) -> Self::State {
             match self {
-                Game::Ping => GameState::Ping(PingState::default()),
-                Game::Pong => GameState::Pong(PongState::default()),
-                Game::Menu => GameState::Menu(MenuState::default()),
+                Self::Ping => GameState::Ping(PingState::default()),
+                Self::Pong => GameState::Pong(PongState::default()),
+                Self::Menu => GameState::Menu(MenuState::default()),
             }
         }
 
         fn failed_state(&self) -> Self::State {
             match self {
-                Game::Ping => GameState::Ping(PingState::Failed),
-                Game::Pong => GameState::Pong(PongState::Failed),
-                Game::Menu => GameState::Menu(MenuState::Failed),
+                Self::Ping => GameState::Ping(PingState::Failed),
+                Self::Pong => GameState::Pong(PongState::Failed),
+                Self::Menu => GameState::Menu(MenuState::Failed),
             }
         }
 
         fn completed_state(&self) -> Self::State {
             match self {
-                Game::Ping => GameState::Ping(PingState::Done),
-                Game::Pong => GameState::Pong(PongState::Done),
-                Game::Menu => GameState::Menu(MenuState::Done),
+                Self::Ping => GameState::Ping(PingState::Done),
+                Self::Pong => GameState::Pong(PongState::Done),
+                Self::Menu => GameState::Menu(MenuState::Done),
             }
         }
     }
@@ -588,15 +595,15 @@ mod tests {
 
     impl StateMachine<Game> for MenuStateMachine {
         #[instrument(name = "menu", skip_all)]
-        fn process(&self, ctx: SmContext<Game>, input: Input) {
+        fn process(&self, ctx: SmContext<Game>, input: GameInput) {
             let id = ctx.id;
-            let Input::Menu(input) = input else {
+            let GameInput::Menu(input) = input else {
                 error!(input = ?input, "invalid input!");
                 return;
             };
 
             let state = ctx.get_state();
-            if let Some(true) = state.map(Self::terminal_state) {
+            if state.map(Game::is_terminal) == Some(true) {
                 warn!(%id, ?state, "Ignoring input due to invalid state");
                 return;
             }
@@ -612,7 +619,7 @@ mod tests {
                     // signal to Ping state machine
                     ctx.signal_queue.push_back(Signal {
                         id: ping_id,
-                        input: Input::Ping(PingInput::StartSending(pong_id, who_holds)),
+                        input: GameInput::Ping(PingInput::StartSending(pong_id, who_holds)),
                     });
                 }
                 MenuInput::PingPongComplete => {
@@ -621,10 +628,9 @@ mod tests {
                 }
                 failure @ (MenuInput::FailedPing | MenuInput::FailedPong) => {
                     let tree = ctx.get_tree().unwrap();
-                    let mut guard = tree.lock();
                     // set all states to failed state
-                    guard.update_all_fn(|mut z| {
-                        z.node.state.fail();
+                    tree.lock().update_all_fn(|mut z| {
+                        z.node.state = z.node.state.as_ref().failed_state();
                         let id = z.node.id;
                         ctx.notification_queue
                             .priority_send(Notification(TimeoutInput::cancel_timeout(id).into()));
@@ -654,15 +660,15 @@ mod tests {
 
     impl StateMachine<Game> for PingStateMachine {
         #[instrument(name = "ping", skip_all)]
-        fn process(&self, ctx: SmContext<Game>, input: Input) {
+        fn process(&self, ctx: SmContext<Game>, input: GameInput) {
             let id = ctx.id;
-            let Input::Ping(input) = input else {
+            let GameInput::Ping(input) = input else {
                 error!(?input, "invalid input!");
                 return;
             };
             assert!(ctx.get_parent_id().is_some());
             let state = ctx.get_state().unwrap();
-            if Self::terminal_state(state) {
+            if Game::is_terminal(state) {
                 warn!(%id, ?state, "Ignoring input due to invalid state");
                 return;
             }
@@ -673,7 +679,7 @@ mod tests {
                     info!(msg = 0, "PINGING");
                     ctx.signal_queue.push_back(Signal {
                         id: pong_id,
-                        input: Input::Pong(PongInput::Packet(Packet {
+                        input: GameInput::Pong(PongInput::Packet(Packet {
                             msg: 0,
                             sender: id,
                             who_holds,
@@ -690,7 +696,7 @@ mod tests {
                     self.set_timeout(&ctx, TEST_TIMEOUT);
                     packet.msg += 5;
 
-                    if let WhoHolds(Some(Game::Ping)) = packet.who_holds {
+                    if packet.who_holds == WhoHolds(Some(Game::Ping)) {
                         info!(msg = packet.msg, "HOLDING");
                         // hold for half theduration of the message
                         let hold_for = Duration::from_millis(packet.msg);
@@ -722,13 +728,13 @@ mod tests {
 
     impl StateMachine<Game> for PongStateMachine {
         #[instrument(name = "pong", skip_all, fields(id = %ctx.id))]
-        fn process(&self, ctx: SmContext<Game>, input: Input) {
-            let Input::Pong(input) = input else {
+        fn process(&self, ctx: SmContext<Game>, input: GameInput) {
+            let GameInput::Pong(input) = input else {
                 error!(?input, "invalid input!");
                 return;
             };
             let state = ctx.get_state().unwrap();
-            if Self::terminal_state(state) {
+            if Game::is_terminal(state) {
                 warn!(?state, "Ignoring input due to invalid state");
                 return;
             }
@@ -747,7 +753,7 @@ mod tests {
                     self.cancel_timeout(&ctx);
                     ctx.signal_queue.push_back(Signal {
                         id: sender,
-                        input: Input::Ping(PingInput::Packet(Packet {
+                        input: GameInput::Ping(PingInput::Packet(Packet {
                             msg,
                             sender: ctx.id,
                             who_holds,
@@ -761,7 +767,7 @@ mod tests {
                     }
                     packet.msg += 5;
 
-                    if let WhoHolds(Some(Game::Pong)) = packet.who_holds {
+                    if packet.who_holds == WhoHolds(Some(Game::Pong)) {
                         info!(msg = packet.msg, "HOLDING");
                         // hold for half the duration of the message
                         let hold_for = Duration::from_millis(packet.msg);
@@ -812,7 +818,7 @@ mod tests {
         let menu_id = StateId::new_rand(Game::Menu);
         ctx.signal_queue.push_back(Signal {
             id: menu_id,
-            input: Input::Menu(MenuInput::Play(WhoHolds(None))),
+            input: GameInput::Menu(MenuInput::Play(WhoHolds(None))),
         });
         tokio::time::sleep(Duration::from_millis(1)).await;
 
@@ -840,9 +846,8 @@ mod tests {
         drop(node);
 
         let tree = ctx.state_store.get_tree(pong_id).unwrap();
-        let node = tree.lock();
-        let state = node.get_state(pong_id).unwrap();
-        assert_eq!(GameState::Pong(PongState::Done), *state);
+        let state = tree.lock().get_state(pong_id).copied().unwrap();
+        assert_eq!(GameState::Pong(PongState::Done), state);
     }
 
     #[tracing_test::traced_test]
@@ -861,7 +866,7 @@ mod tests {
         let menu_id = StateId::new_rand(Game::Menu);
         ctx.signal_queue.push_back(Signal {
             id: menu_id,
-            input: Input::Menu(MenuInput::Play(WhoHolds(Some(Game::Ping)))),
+            input: GameInput::Menu(MenuInput::Play(WhoHolds(Some(Game::Ping)))),
         });
 
         tokio::time::sleep(TEST_TIMEOUT * 4).await;
@@ -869,12 +874,12 @@ mod tests {
         {
             let tree = ctx.state_store.get_tree(menu_id).unwrap();
             let node = tree.lock();
-            let ping_node = &node.children[0];
-            let pong_node = &node.children[1];
+            let ping = &node.children[0];
+            let pong = &node.children[1];
             assert_eq!(menu_id, node.id);
             assert_eq!(GameState::Menu(MenuState::Failed), node.state);
-            assert_eq!(GameState::Ping(PingState::Failed), ping_node.state);
-            assert_eq!(GameState::Pong(PongState::Failed), pong_node.state);
+            assert_eq!(GameState::Ping(PingState::Failed), ping.state);
+            assert_eq!(GameState::Pong(PongState::Failed), pong.state);
 
             // !!NOTE!! ============================================================
             // we are trying to acquire another lock...
@@ -906,7 +911,7 @@ mod tests {
         let menu_id = StateId::new_rand(Game::Menu);
         ctx.signal_queue.push_back(Signal {
             id: menu_id,
-            input: Input::Menu(MenuInput::Play(WhoHolds(Some(Game::Pong)))),
+            input: GameInput::Menu(MenuInput::Play(WhoHolds(Some(Game::Pong)))),
         });
 
         tokio::time::sleep(TEST_TIMEOUT * 4).await;
@@ -920,6 +925,7 @@ mod tests {
         assert_eq!(GameState::Ping(PingState::Failed), ping_node.state);
         assert_eq!(GameState::Pong(PongState::Failed), pong_node.state);
         // Ensure that our Menu failed due to Ping
+        drop(node);
         assert_eq!(MenuInput::FailedPing, *menu_failures.get(&menu_id).unwrap());
     }
 }

@@ -161,7 +161,7 @@ where
     K: HashKind,
     O: Operation,
 {
-    pub fn new(id: StateId<K>, op: O) -> Self {
+    pub const fn new(id: StateId<K>, op: O) -> Self {
         Self { id, op }
     }
 }

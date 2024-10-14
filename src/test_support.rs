@@ -38,15 +38,18 @@ macro_rules! node_state {
         }
 
         impl State for NodeState {
-            fn get_kind(&self) -> &dyn Kind<State = NodeState> {
+            type Input = ();
+        }
+        impl AsRef<NodeKind> for NodeState {
+            fn as_ref(&self) -> &NodeKind {
                 match self {
-                    $( NodeState::$name(_) => &NodeKind::$name, )*
+                    $( Self::$name(_) => &NodeKind::$name, )*
                 }
             }
         }
-
         impl Kind for NodeKind {
             type State = NodeState;
+            type Input = ();
 
             fn new_state(&self) -> Self::State {
                 match self {
@@ -98,9 +101,9 @@ impl TimeoutMessage<TestKind> for TestMsg {
 impl GetTopic<TestTopic> for TestMsg {
     fn get_topic(&self) -> TestTopic {
         match self {
-            TestMsg::TimeoutInput(_) => TestTopic::Timeout,
-            TestMsg::Ingress(_) => TestTopic::Ingress,
-            TestMsg::Other => TestTopic::Other,
+            Self::TimeoutInput(_) => TestTopic::Timeout,
+            Self::Ingress(_) => TestTopic::Ingress,
+            Self::Other => TestTopic::Other,
         }
     }
 }
@@ -115,7 +118,11 @@ pub enum TestState {
 }
 
 impl State for TestState {
-    fn get_kind(&self) -> &dyn Kind<State = TestState> {
+    type Input = TestInput;
+}
+
+impl AsRef<TestKind> for TestState {
+    fn as_ref(&self) -> &TestKind {
         &TestKind
     }
 }
@@ -125,6 +132,7 @@ pub struct TestKind;
 
 impl Kind for TestKind {
     type State = TestState;
+    type Input = TestInput;
 
     fn new_state(&self) -> Self::State {
         TestState::New
@@ -153,7 +161,7 @@ impl TryFrom<InPacket> for TestInput {
 }
 impl Timeout for TestKind {}
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TestInput {
     Timeout(Instant),
     Packet(InPacket),
@@ -162,11 +170,10 @@ pub enum TestInput {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutPacket(pub Vec<u8>);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InPacket(pub Vec<u8>);
 
 impl Rex for TestKind {
-    type Input = TestInput;
     type Message = TestMsg;
 
     fn state_input(&self, _state: <Self as Kind>::State) -> Option<Self::Input> {
@@ -198,7 +205,7 @@ impl StateRouter<TestKind> for TestStateRouter {
 impl<'a> TryFrom<&'a InPacket> for TestKind {
     type Error = Report<ConversionError>;
     fn try_from(_value: &'a InPacket) -> Result<Self, Self::Error> {
-        Ok(TestKind)
+        Ok(Self)
     }
 }
 
@@ -226,12 +233,12 @@ impl TryInto<TimeoutInput<TestKind>> for TestMsg {
 
 impl From<OutPacket> for TestMsg {
     fn from(val: OutPacket) -> Self {
-        TestMsg::Ingress(val)
+        Self::Ingress(val)
     }
 }
 
 impl From<TimeoutInput<TestKind>> for TestMsg {
     fn from(value: TimeoutInput<TestKind>) -> Self {
-        TestMsg::TimeoutInput(value)
+        Self::TimeoutInput(value)
     }
 }

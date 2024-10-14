@@ -1,24 +1,6 @@
-use std::{collections::HashSet, fmt, hash::Hash};
+use std::collections::HashSet;
 
-use crate::{Kind, State};
-
-impl<Id, K> Kind for Id
-where
-    K: Kind,
-    Id: std::ops::Deref<Target = K> + Send + fmt::Debug,
-{
-    type State = K::State;
-    fn new_state(&self) -> Self::State {
-        self.deref().new_state()
-    }
-    fn failed_state(&self) -> Self::State {
-        self.deref().failed_state()
-    }
-
-    fn completed_state(&self) -> Self::State {
-        self.deref().completed_state()
-    }
-}
+use crate::{HashKind, Kind, StateId};
 
 #[derive(Debug)]
 pub struct Insert<Id> {
@@ -39,23 +21,22 @@ pub struct Node<Id, S> {
     pub children: Vec<Node<Id, S>>,
 }
 
-impl<Id, S> Node<Id, S>
+impl<K> Node<StateId<K>, K::State>
 where
-    S: State,
-    Id: Copy + Eq + PartialEq + Hash + fmt::Display + Kind<State = S> + fmt::Debug,
+    K: Kind + HashKind,
 {
     #[must_use]
-    pub fn new(id: Id) -> Self {
+    pub fn new(id: StateId<K>) -> Self {
         Self {
-            id,
             state: id.new_state(),
+            id,
             descendant_keys: HashSet::new(),
             children: Vec::new(),
         }
     }
 
     #[must_use]
-    pub fn zipper(self) -> Zipper<Id, S> {
+    pub const fn zipper(self) -> Zipper<StateId<K>, K::State> {
         Zipper {
             node: self,
             parent: None,
@@ -64,7 +45,7 @@ where
     }
 
     #[must_use]
-    pub fn get(&self, id: Id) -> Option<&Node<Id, S>> {
+    pub fn get(&self, id: StateId<K>) -> Option<&Self> {
         if self.id == id {
             return Some(self);
         }
@@ -80,20 +61,20 @@ where
     }
 
     #[must_use]
-    pub fn get_state(&self, id: Id) -> Option<&S> {
+    pub fn get_state(&self, id: StateId<K>) -> Option<&K::State> {
         self.get(id).map(|n| &n.state)
     }
 
     #[must_use]
-    pub fn child(&self, id: Id) -> Option<&Node<Id, S>> {
+    pub fn child(&self, id: StateId<K>) -> Option<&Self> {
         self.children
             .iter()
             .find(|node| node.id == id || node.descendant_keys.contains(&id))
     }
 
-    // get array index by of node with Id in self.descendant_keys
+    // get array index by of node with StateId<K> in self.descendant_keys
     #[must_use]
-    pub fn child_idx(&self, id: Id) -> Option<usize> {
+    pub fn child_idx(&self, id: StateId<K>) -> Option<usize> {
         self.children
             .iter()
             .enumerate()
@@ -101,13 +82,13 @@ where
             .map(|(idx, _)| idx)
     }
 
-    pub fn insert(&mut self, insert: Insert<Id>) {
+    pub fn insert(&mut self, insert: Insert<StateId<K>>) {
         // temporary allocation to allow a drop in &mut implementation
         //
         // this can be optimized later but right now allocation impact
         // is non existent since Node::new
         // does not grow its `?Sized` types
-        let mut swap_node = Node::new(self.id);
+        let mut swap_node = Self::new(self.id);
         std::mem::swap(&mut swap_node, self);
 
         swap_node = swap_node.into_insert(insert);
@@ -117,7 +98,10 @@ where
 
     /// inserts a new node using self by value
     #[must_use]
-    pub fn into_insert(self, Insert { parent_id, id }: Insert<Id>) -> Node<Id, S> {
+    pub fn into_insert(
+        self,
+        Insert { parent_id, id }: Insert<StateId<K>>,
+    ) -> Self {
         // inserts at this point should be guaranteed Some(id)
         // ince a parent_id.is_none() should be handled by the node
         // store through a new graph creation
@@ -130,7 +114,7 @@ where
     }
 
     #[must_use]
-    pub fn get_parent_id(&self, id: Id) -> Option<Id> {
+    pub fn get_parent_id(&self, id: StateId<K>) -> Option<StateId<K>> {
         // root_node edge case
         if !self.descendant_keys.contains(&id) {
             return None;
@@ -148,9 +132,9 @@ where
         None
     }
 
-    pub fn update(&mut self, update: Update<Id, S>) {
+    pub fn update(&mut self, update: Update<StateId<K>, K::State>) {
         // see Node::insert
-        let mut swap_node = Node::new(self.id);
+        let mut swap_node = Self::new(self.id);
         std::mem::swap(&mut swap_node, self);
 
         swap_node = swap_node.into_update(update);
@@ -159,9 +143,12 @@ where
     }
 
     /// update a given node's state and return the parent ID if it exists
-    pub fn update_and_get_parent_id(&mut self, Update { id, state }: Update<Id, S>) -> Option<Id> {
+    pub fn update_and_get_parent_id(
+        &mut self,
+        Update { id, state }: Update<StateId<K>, K::State>,
+    ) -> Option<StateId<K>> {
         // see Node::insert
-        let mut swap_node = Node::new(self.id);
+        let mut swap_node = Self::new(self.id);
         std::mem::swap(&mut swap_node, self);
 
         let (parent_id, mut swap_node) = swap_node
@@ -178,10 +165,10 @@ where
     // apply a closure to all nodes in a tree
     pub fn update_all_fn<F>(&mut self, f: F)
     where
-        F: Fn(Zipper<Id, S>) -> Node<Id, S> + Clone,
+        F: Fn(Zipper<StateId<K>, K::State>) -> Self + Clone,
     {
         // see Node::insert
-        let mut swap_node = Node::new(self.id);
+        let mut swap_node = Self::new(self.id);
         std::mem::swap(&mut swap_node, self);
 
         swap_node = swap_node.zipper().finish_update_fn(f);
@@ -190,7 +177,10 @@ where
     }
 
     #[must_use]
-    pub fn into_update(self, Update { id, state }: Update<Id, S>) -> Node<Id, S> {
+    pub fn into_update(
+        self,
+        Update { id, state }: Update<StateId<K>, K::State>,
+    ) -> Self {
         self.zipper().by_id(id).set_state(state).finish_update()
     }
 }
@@ -212,12 +202,13 @@ pub struct Zipper<Id, S> {
     self_idx: usize,
 }
 
-impl<Id, S> Zipper<Id, S>
+type ZipperNode<K> = Node<StateId<K>, <K as Kind>::State>;
+
+impl<K> Zipper<StateId<K>, K::State>
 where
-    S: State,
-    Id: Copy + Eq + PartialEq + Hash + fmt::Display + Kind<State = S> + fmt::Debug,
+    K: Kind + HashKind,
 {
-    fn by_id(mut self, id: Id) -> Zipper<Id, S> {
+    fn by_id(mut self, id: StateId<K>) -> Self {
         let mut contains_id = self.node.descendant_keys.contains(&id);
         while contains_id {
             let idx = self.node.child_idx(id).unwrap();
@@ -231,7 +222,7 @@ where
         self
     }
 
-    fn child(mut self, idx: usize) -> Zipper<Id, S> {
+    fn child(mut self, idx: usize) -> Self {
         // Remove the specified child from the node's children.
         //  Zipper should avoid having a parent reference
         // since parents will be mutated during node refocusing.
@@ -239,27 +230,27 @@ where
         let child = self.node.children.swap_remove(idx);
 
         // Return a new Zipper focused on the specified child.
-        Zipper {
+        Self {
             node: child,
             parent: Some(Box::new(self)),
             self_idx: idx,
         }
     }
 
-    fn set_state(mut self, state: S) -> Zipper<Id, S> {
+    const fn set_state(mut self, state: K::State) -> Self {
         self.node.state = state;
         self
     }
 
-    fn insert_child(mut self, id: Id) -> Zipper<Id, S> {
+    fn insert_child(mut self, id: StateId<K>) -> Self {
         self.node.children.push(Node::new(id));
         self
     }
 
-    fn parent(self) -> Zipper<Id, S> {
+    fn parent(self) -> Self {
         // Destructure this Zipper
         // https://github.com/rust-lang/rust/issues/16293#issuecomment-185906859
-        let Zipper {
+        let Self {
             node,
             parent,
             self_idx,
@@ -276,7 +267,7 @@ where
         parent.node.children.swap(self_idx, last_idx);
 
         // Return a new Zipper focused on the parent.
-        Zipper {
+        Self {
             node: parent.node,
             parent: parent.parent,
             self_idx: parent.self_idx,
@@ -284,7 +275,7 @@ where
     }
 
     //  try something like Iterator::fold
-    fn finish_insert(mut self, id: Id) -> Node<Id, S> {
+    fn finish_insert(mut self, id: StateId<K>) -> ZipperNode<K> {
         self.node.descendant_keys.insert(id);
         while self.parent.is_some() {
             self = self.parent();
@@ -295,7 +286,7 @@ where
     }
 
     #[must_use]
-    pub fn finish_update(mut self) -> Node<Id, S> {
+    pub fn finish_update(mut self) -> ZipperNode<K> {
         while self.parent.is_some() {
             self = self.parent();
         }
@@ -304,15 +295,15 @@ where
     }
 
     // only act on parent nodes
-    fn finish_update_parent_id(self) -> (Option<Id>, Node<Id, S>) {
+    fn finish_update_parent_id(self) -> (Option<StateId<K>>, ZipperNode<K>) {
         let parent_id = self.parent.as_ref().map(|z| z.node.id);
         (parent_id, self.finish_update())
     }
 
     // act on all nodes
-    fn finish_update_fn<F>(mut self, f: F) -> Node<Id, S>
+    fn finish_update_fn<F>(mut self, f: F) -> ZipperNode<K>
     where
-        F: Fn(Zipper<Id, S>) -> Node<Id, S> + Clone,
+        F: Fn(Self) -> ZipperNode<K> + Clone,
     {
         self.node.children = self
             .node
@@ -421,8 +412,9 @@ mod tests {
         // ...except for Dave, he is in "Completed" state
         // =================================================
         tree = tree.zipper().finish_update_fn(|mut z| {
-            if !z.node.state.is_completed() {
-                z.node.state.fail();
+            let kind: NodeKind = *z.node.state.as_ref();
+            if !(z.node.state == kind.completed_state()) {
+                z.node.state = kind.failed_state();
             }
             z.finish_update()
         });
