@@ -1,31 +1,24 @@
 queue_rules:
   - name: default
-    conditions:
-      - base~=main
-
-pull_request_rules:
-  - name: automerge if approved and tests pass
-    # https://docs.mergify.com/conditions/#conditions
-    conditions:
+    queue_conditions:
       - "#approved-reviews-by>=1"
-      - -closed # filter-out closed GH PRs
-      - -conflict # skip PRs with conflicts
-      - -draft # filter-out GH draft PRs
-      - -label=nomerge # prevents automerge
+      - -closed
+      - -conflict
+      - -draft
+      - -label=nomerge
       - base~=main
       - label=automerge
-    actions:
-      queue:
-        name: default
-        method: squash
-        # https://docs.mergify.com/configuration/#template
-        commit_message_template: |
-          {{ title }} (#{{ number }})
+    merge_conditions:
+      - base~=main
+    commit_message_template: |
+      {{ title }} (#{{ number }})
 
-          Approved by: @{{ approved_reviews_by | join(', @') }}
-          ============
-          {{ body }}
+      Approved by: @{{ approved_reviews_by | join(', @') }}
+      ============
+      {{ body }}
+    merge_method: squash
 
+pull_request_rules:
   - name: cleanup post-merge
     conditions:
       - merged
@@ -56,7 +49,7 @@ pull_request_rules:
       - label=automerge
     actions:
       comment:
-        message: "[\U0001F198] @{{author}}: `{{head}}` has conflicts with `{{base}}` that must be resolved."
+        message: "[🆘] @{{author}}: `{{head}}` has conflicts with `{{base}}` that must be resolved."
 
   - name: alert on tests failure for automerge
     conditions:
@@ -64,7 +57,7 @@ pull_request_rules:
       - status-failure=commit
     actions:
       comment:
-        message: "[\U0001F198] @{{author}}: unable to merge due to CI failure."
+        message: "[🆘] @{{author}}: unable to merge due to CI failure."
 
   - name: auto-assign author
     conditions:
@@ -72,87 +65,55 @@ pull_request_rules:
     actions:
       assign:
         users: ["{{author}}"]
-
-  # ===============================================================================
-  # LABELS
-  # ===============================================================================
-  # Automatically add labels when PRs match certain patterns
-  #
-  # NOTE:
-  # - single quotes for regex to avoid accidental escapes
-  # - Mergify leverages Python regular expressions to match rules.
-  #
-  # Semantic commit messages
-  # - feat:      new feature for the user, not a new feature for build script
-  # - chore:     updating grunt tasks etc; no production code change
-  # - docs:      changes to the documentation
-  # - fix:       bug fix for the user, not a fix to a build script
-  # - release:   increment minor/major version of our release
-  # - rename:    changes to naming conventions
-  # - spike:     research spike
-  # - style:     formatting, missing semi colons, etc; no production code change
-  # ===============================================================================
-
   - name: feature label
     conditions:
       - "head~=(?i)^feat(ure)?"
     actions:
       label:
         add: ["feature"]
-
   - name: fix label
     conditions:
       - "head~=(?i)^(bug|hot)?fix"
     actions:
       label:
         add: ["fix"]
-
   - name: chore label
     conditions:
       - "head~=(?i)^chore"
     actions:
       label:
         add: ["chore"]
-
   - name: docs label
     conditions:
       - "head~=(?i)^doc"
     actions:
       label:
         add: ["documentation"]
-
   - name: release
     conditions:
       - "head~=(?i)^rel(ease)?"
     actions:
       label:
         add: ["release"]
-
   - name: spike
     conditions:
       - "head~=(?i)^spike"
     actions:
       label:
         add: ["spike"]
-
   - name: rename
     conditions:
       - "head~=(?i)^rename"
     actions:
       label:
         add: ["rename"]
-
   - name: style
     conditions:
       - "head~=(?i)^style"
     actions:
       label:
         add: ["style"]
-
-# Refs:
-#
-# https://docs.mergify.io/getting-started/
-# https://docs.mergify.io/configuration/?highlight=regular%20expressions#regular-expressions
-# https://gist.github.com/joshbuchea/6f47e86d2510bce28f8e7f42ae84c716
-
-
+  - name: automerge if approved and tests pass
+    conditions: []
+    actions:
+      queue:
